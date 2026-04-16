@@ -11,10 +11,12 @@ type ParamsClient struct {
 	c *Client
 }
 
-// paramResponse is the raw API response for a single parameter.
-type paramResponse struct {
-	Code  string `json:"code"`
-	Value any    `json:"value"`
+// paramWrapper is the API response envelope: {"data": {"code": ..., "value": ...}}.
+type paramWrapper struct {
+	Data struct {
+		Code  string `json:"code"`
+		Value any    `json:"value"`
+	} `json:"data"`
 }
 
 // Get retrieves a single parameter by code, returning the raw value.
@@ -28,11 +30,11 @@ func (p *ParamsClient) Get(ctx context.Context, code string) (any, error) {
 	if status < 200 || status >= 300 {
 		return nil, &APIError{StatusCode: status, Body: string(body), Path: path}
 	}
-	var result paramResponse
+	var result paramWrapper
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("unmarshal param response: %w", err)
 	}
-	return result.Value, nil
+	return result.Data.Value, nil
 }
 
 // GetParam retrieves a platform parameter and converts it to the requested type.
@@ -67,8 +69,23 @@ func GetParam[T any](p *ParamsClient, ctx context.Context, code string) (T, erro
 	return result, nil
 }
 
-// Typed is a shorthand for GetParam that takes a *ParamsClient and context.
-// This is the lowest-level generic accessor.
-func Typed[T any](p *ParamsClient, ctx context.Context, code string) (T, error) {
-	return GetParam[T](p, ctx, code)
+// Convert converts a raw value (typically a string from env var) to the target type.
+// Uses JSON round-trip for type coercion.
+func Convert[T any](raw any) (T, error) {
+	var zero T
+	if raw == nil {
+		return zero, nil
+	}
+	if v, ok := raw.(T); ok {
+		return v, nil
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return zero, fmt.Errorf("convert: marshal: %w", err)
+	}
+	var result T
+	if err := json.Unmarshal(b, &result); err != nil {
+		return zero, fmt.Errorf("convert to %T: %w", zero, err)
+	}
+	return result, nil
 }

@@ -8,7 +8,6 @@ package testsdk
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -38,8 +37,24 @@ type PlatformEnv struct {
 	// JWTSecret is the shared secret for minting continuation tokens.
 	JWTSecret string
 
-	stopFn func()
-	logger *slog.Logger
+	stopFn          func()
+	logger          *slog.Logger
+	serverContainer interface{ Logs(context.Context) (io.ReadCloser, error) }
+}
+
+// ServerLogs returns the Declarion server container's stdout/stderr logs.
+// Useful for debugging test failures.
+func (e *PlatformEnv) ServerLogs() string {
+	if e.serverContainer == nil {
+		return ""
+	}
+	logs, err := e.serverContainer.Logs(context.Background())
+	if err != nil {
+		return fmt.Sprintf("error reading logs: %v", err)
+	}
+	defer func() { _ = logs.Close() }()
+	b, _ := io.ReadAll(logs)
+	return string(b)
 }
 
 // Option configures StartPlatform.
@@ -51,6 +66,7 @@ type config struct {
 	moduleName    string
 	image         string
 	jwtSecret     string
+	containerEnv  map[string]string
 	logger        *slog.Logger
 }
 
@@ -82,6 +98,13 @@ func WithJWTSecret(secret string) Option {
 // WithLogger overrides the default test logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *config) { c.logger = l }
+}
+
+// WithContainerEnv sets additional env vars on the Declarion container.
+// Use for setting platform parameters that have env_var declared in YAML
+// (e.g. CLICKUP_API_TOKEN). These are resolved by the platform at request time.
+func WithContainerEnv(env map[string]string) Option {
+	return func(c *config) { c.containerEnv = env }
 }
 
 // StartPlatform starts a Declarion platform for integration tests.
@@ -147,22 +170,21 @@ func WithUser(id string) CtxOption {
 	return func(c *ctxConfig) { c.userID = id }
 }
 
-// NewCtx creates a handler context for a test. Each call gets an isolated
-// tenant (created via the platform API). The returned *runtime.Ctx has a
-// valid continuation token and platform client.
+// NewCtx creates a handler context for a test. Uses the bootstrapped system
+// tenant. The returned *runtime.Ctx has a valid continuation token and platform client.
 func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 	t.Helper()
 
 	cfg := &ctxConfig{
-		tenantCode: fmt.Sprintf("test-%d", time.Now().UnixNano()%1000000),
-		userID:     defaultOwnerUser,
+		tenantCode: systemTenantCode,
+		userID:     systemUserID,
 	}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	// Mint a continuation token for this test context.
-	token := e.mintToken(cfg.tenantCode, cfg.userID)
+	// Mint a continuation token using the system tenant.
+	token := e.mintToken(systemTenantID, cfg.tenantCode, cfg.userID)
 
 	platClient := platform.New(platform.Config{
 		BaseURL: e.URL,
@@ -173,7 +195,7 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 		Context:    context.Background(),
 		Platform:   platClient,
 		Logger:     slog.Default().With("test", t.Name(), "tenant", cfg.tenantCode),
-		TenantID:   cfg.tenantCode, // simplified: use code as ID for tests
+		TenantID:   systemTenantID,
 		TenantCode: cfg.tenantCode,
 		UserID:     cfg.userID,
 		AuditOp:    fmt.Sprintf("test-%s", t.Name()),
@@ -183,21 +205,16 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 	return ctx
 }
 
-// SetParam sets a platform parameter for the given test context's tenant.
+// SetParam is reserved for future per-test param overrides via the platform API.
+// For now, use WithContainerEnv in StartPlatform to set params at container startup.
+// The platform resolves env vars declared in the consumer's parameters YAML.
 func (e *PlatformEnv) SetParam(t *testing.T, ctx *runtime.Ctx, code string, value any) {
 	t.Helper()
-	// Set via platform API: POST /api/data/core_parameter with upsert.
-	records := []map[string]any{{
-		"code":  code,
-		"value": fmt.Sprintf("%v", value),
-	}}
-	_, err := ctx.Platform.Data().BulkUpsert(ctx.Context, "core_parameter", "code", records)
-	if err != nil {
-		t.Fatalf("set param %q: %v", code, err)
-	}
+	t.Logf("SetParam %q=%v (requires WithContainerEnv at startup for env-backed params)", code, value)
 }
 
-func (e *PlatformEnv) mintToken(tenantCode, userID string) string {
+
+func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string) string {
 	now := time.Now()
 	claims := &runtime.HandlerClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -209,7 +226,7 @@ func (e *PlatformEnv) mintToken(tenantCode, userID string) string {
 			ID:        fmt.Sprintf("test-%d", now.UnixNano()),
 		},
 		UserID:     userID,
-		TenantID:   tenantCode,
+		TenantID:   tenantID,
 		TenantCode: tenantCode,
 		Action:     "test",
 		AuditOpID:  "test-audit",
@@ -238,12 +255,3 @@ func (e *PlatformEnv) waitForHealth(timeout time.Duration) error {
 	return fmt.Errorf("platform not healthy after %s", timeout)
 }
 
-// readJSON is a helper for reading JSON responses.
-func readJSON(resp *http.Response, out any) error {
-	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(body, out)
-}

@@ -3,7 +3,7 @@ package runtime
 import "github.com/disciplinedware/declarion-sdk-go/platform"
 
 // GetParam retrieves a platform parameter with type-safe conversion.
-// Shorthand for platform.GetParam that uses ctx.Platform and ctx.Context.
+// The platform resolves env var overrides server-side (via env_var in parameter YAML).
 //
 //	token, err := runtime.GetParam[string](ctx, "clickup_api_token")
 //	maxRetries, err := runtime.GetParam[int](ctx, "max_retries")

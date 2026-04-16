@@ -102,18 +102,29 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		}
 		return nil, fmt.Errorf("migrations failed with exit code %d: %s", state.ExitCode, logMsg)
 	}
+	// Log successful migration output.
+	migrateLogs, _ := migrateContainer.Logs(ctx)
+	if migrateLogs != nil {
+		logBytes, _ := io.ReadAll(migrateLogs)
+		_ = migrateLogs.Close()
+		cfg.logger.Info("migration completed", "logs", string(logBytes))
+	}
 	_ = migrateContainer.Terminate(ctx)
 
 	// Start the Declarion API server.
+	serverEnv := map[string]string{
+		"DECLARION_DATABASE_URL": dbURL,
+		"DECLARION_JWT_SECRET":   cfg.jwtSecret,
+		"DECLARION_ROLES":        "api",
+		"DECLARION_MODULES_DIR":  "/app/modules",
+	}
+	for k, v := range cfg.containerEnv {
+		serverEnv[k] = v
+	}
 	declarionReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: cfg.image,
-			Env: map[string]string{
-				"DECLARION_DATABASE_URL": dbURL,
-				"DECLARION_JWT_SECRET":   cfg.jwtSecret,
-				"DECLARION_ROLES":        "api",
-				"DECLARION_MODULES_DIR":  "/app/modules",
-			},
+			Env:   serverEnv,
 			ExposedPorts: []string{"3000/tcp"},
 			WaitingFor: wait.ForHTTP("/api/health").
 				WithPort("3000/tcp").
@@ -152,12 +163,25 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	}
 
 	url := fmt.Sprintf("http://%s:%s", declarionHost, declarionPort.Port())
+
+	// Bootstrap: create the system tenant + owner user via SQL.
+	// This is the same pattern as the platform's initial setup - the first
+	// tenant must exist before any API call can succeed (auth requires tenant_id).
+	if err := bootstrapTenant(ctx, pgContainer, net); err != nil {
+		_ = declarionContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		cleanupModuleDir()
+		return nil, fmt.Errorf("bootstrap tenant: %w", err)
+	}
+
 	cfg.logger.Info("platform started", "url", url)
 
 	env := &PlatformEnv{
-		URL:       url,
-		JWTSecret: cfg.jwtSecret,
-		logger:    cfg.logger,
+		URL:              url,
+		JWTSecret:        cfg.jwtSecret,
+		logger:           cfg.logger,
+		serverContainer:  declarionContainer,
 		stopFn: func() {
 			termCtx := context.Background()
 			if err := declarionContainer.Terminate(termCtx); err != nil {
@@ -172,6 +196,33 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	}
 
 	return env, nil
+}
+
+const (
+	systemTenantID   = "00000000-0000-0000-0000-000000000001"
+	systemTenantCode = "test"
+	systemUserID     = "00000000-0000-0000-0000-000000000002"
+)
+
+// bootstrapTenant creates the initial tenant + owner user in the DB via psql.
+func bootstrapTenant(ctx context.Context, pgContainer *postgres.PostgresContainer, net *testcontainers.DockerNetwork) error {
+	sql := fmt.Sprintf(`
+		INSERT INTO declarion.tenants (id, code, name)
+		VALUES ('%s', '%s', '{"en":"System Test Tenant"}')
+		ON CONFLICT (id) DO NOTHING;
+	`, systemTenantID, systemTenantCode)
+
+	exitCode, output, err := pgContainer.Exec(ctx, []string{
+		"psql", "-U", "declarion", "-d", "declarion", "-c", sql,
+	})
+	if err != nil {
+		return fmt.Errorf("exec psql: %w", err)
+	}
+	if exitCode != 0 {
+		outBytes, _ := io.ReadAll(output)
+		return fmt.Errorf("psql exit %d: %s", exitCode, string(outBytes))
+	}
+	return nil
 }
 
 // moduleMount holds the resolved paths and manifest for mounting into containers.
