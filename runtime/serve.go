@@ -22,8 +22,16 @@ const (
 	// ProtocolVersion is the Declarion wire contract version this SDK supports.
 	ProtocolVersion = "1"
 
-	// maxRequestSize limits inbound JSON-RPC request bodies.
-	maxRequestSize = 10 * 1024 * 1024 // 10 MB
+	// MaxRequestSize caps inbound JSON-RPC request bodies (request-in, sidecar).
+	// Bulk handlers (e.g. ClickUp imports, CRM bulk upserts) receive previous_result
+	// from composites that can legitimately be tens of MB. 100MB matches
+	// declarion-core's DefaultHandlerResponseLimit so any payload accepted by the
+	// dispatcher can always reach the sidecar.
+	//
+	// Enforced via http.MaxBytesReader so oversized requests fail loudly with
+	// JSON-RPC JSONRPCParseError + a specific message, instead of being silently
+	// truncated into a misleading "invalid JSON" parse error.
+	MaxRequestSize int64 = 100 * 1024 * 1024
 )
 
 // Config configures the sidecar server.
@@ -156,8 +164,19 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 	w.Header().Set("Content-Type", "application/json")
 
 	// Read and parse the request body FIRST so we have req.ID for error responses.
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxRequestSize))
+	// http.MaxBytesReader rejects oversized requests loudly with *http.MaxBytesError,
+	// which we surface as JSONRPCParseError + specific message rather than a
+	// silent truncation that would look like an "invalid JSON" error downstream.
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestSize)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError,
+				fmt.Sprintf("request body exceeded %d bytes (limit %d)", maxErr.Limit, MaxRequestSize),
+				"", false))
+			return
+		}
 		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, "read error", "", false))
 		return
 	}

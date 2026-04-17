@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,16 @@ import (
 	"strings"
 	"time"
 )
+
+// MaxResponseSize caps platform API response bodies this client will read
+// (response-in, from sidecar's POV). Bulk list endpoints can legitimately
+// return tens of MB; 100MB matches the platform's DefaultHandlerResponseLimit
+// so a response the platform was willing to send always fits here.
+//
+// Enforced via http.MaxBytesReader so oversized responses surface as a
+// specific APIError rather than being silently truncated into a misleading
+// JSON parse error downstream.
+const MaxResponseSize int64 = 100 * 1024 * 1024
 
 // Config configures the platform client.
 type Config struct {
@@ -121,9 +132,15 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	const maxResponseSize = 10 * 1024 * 1024
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
+	// MaxBytesReader surfaces *http.MaxBytesError on overflow so callers see
+	// "response exceeded N bytes" instead of a silently-truncated body that
+	// downstream JSON parse would misreport as "unexpected end of JSON input".
+	respBody, err := io.ReadAll(http.MaxBytesReader(nil, resp.Body, MaxResponseSize))
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return nil, resp.StatusCode, fmt.Errorf("platform %s %s: response exceeded %d bytes (limit %d)", method, path, maxErr.Limit, MaxResponseSize)
+		}
 		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
 	}
 
