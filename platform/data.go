@@ -37,19 +37,27 @@ type ListResponse struct {
 }
 
 // Get retrieves a single record by ID.
+// The platform wraps the response in {"data": {...}}; this method unwraps it
+// and returns the inner object directly.
 func (d *DataClient) Get(ctx context.Context, entity, id string) (map[string]any, error) {
-	body, status, err := d.c.do(ctx, "GET", fmt.Sprintf("/api/data/%s/%s", entity, id), nil, nil)
+	path := fmt.Sprintf("/api/data/%s/%s", entity, id)
+	body, status, err := d.c.do(ctx, "GET", path, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: string(body), Path: fmt.Sprintf("/api/data/%s/%s", entity, id)}
+		return nil, &APIError{StatusCode: status, Body: string(body), Path: path}
 	}
-	var result map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
+	var envelope struct {
+		Data map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
 		return nil, fmt.Errorf("unmarshal get response: %w", err)
 	}
-	return result, nil
+	if envelope.Data == nil {
+		return nil, fmt.Errorf("get response missing data field")
+	}
+	return envelope.Data, nil
 }
 
 // List retrieves records with pagination and filters.
@@ -110,12 +118,26 @@ func (d *DataClient) Delete(ctx context.Context, entity string, pkObjects []map[
 	return nil
 }
 
+// UpsertItem is a single row returned by BulkUpsert. Fields contains all
+// entity columns plus enrichment keys ($refs, $statuses, etc.).
+// WasInserted is true when the row was created by this call (xmax = 0 in
+// Postgres), false when an existing row was updated or left unchanged.
+type UpsertItem struct {
+	Fields      map[string]any
+	WasInserted bool
+}
+
 // BulkUpsert creates or updates records using unique_fields for dedup.
 // uniqueFields is a comma-separated list of fields (e.g. "id" or "email,tenant_id").
-func (d *DataClient) BulkUpsert(ctx context.Context, entity string, uniqueFields string, records []map[string]any) ([]map[string]any, error) {
+// conflictPredicate is an optional SQL WHERE clause for partial-index upserts
+// (e.g. "linkedin IS NOT NULL AND deleted_at IS NULL"). Pass "" for full unique constraints.
+func (d *DataClient) BulkUpsert(ctx context.Context, entity string, uniqueFields string, records []map[string]any, conflictPredicate ...string) ([]UpsertItem, error) {
 	q := url.Values{}
 	if uniqueFields != "" {
 		q.Set("unique_fields", uniqueFields)
+	}
+	if len(conflictPredicate) > 0 && conflictPredicate[0] != "" {
+		q.Set("conflict_predicate", conflictPredicate[0])
 	}
 
 	path := fmt.Sprintf("/api/data/%s", entity)
@@ -131,11 +153,18 @@ func (d *DataClient) BulkUpsert(ctx context.Context, entity string, uniqueFields
 	if status < 200 || status >= 300 {
 		return nil, &APIError{StatusCode: status, Body: truncate(string(body), 500), Path: u}
 	}
-	var result []map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
+	var raw []map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("unmarshal upsert response: %w", err)
 	}
-	return result, nil
+	items := make([]UpsertItem, len(raw))
+	for i, row := range raw {
+		wasInserted, _ := row["was_inserted"].(bool)
+		// Remove the synthetic field so Fields contains only entity data.
+		delete(row, "was_inserted")
+		items[i] = UpsertItem{Fields: row, WasInserted: wasInserted}
+	}
+	return items, nil
 }
 
 func (d *DataClient) writeMany(ctx context.Context, method, entity, queryExtra string, records []map[string]any) ([]map[string]any, error) {
