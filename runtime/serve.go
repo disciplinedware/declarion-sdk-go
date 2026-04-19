@@ -246,6 +246,17 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 		Baggage:     baggage,
 	})
 
+	// Extract reserved `_object_ids` from JSON-RPC params before the handler's
+	// typed params are unmarshalled. Reserved keys (underscore prefix) are
+	// platform-injected metadata; handlers see them via dedicated Ctx fields,
+	// not as part of their declared params surface.
+	objectIDs, paramsWithoutReserved, err := extractObjectIDs(req.Params)
+	if err != nil {
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
+			fmt.Sprintf("invalid _object_ids: %s", err), CodeValidation, false))
+		return
+	}
+
 	// Build handler context.
 	hctx := &Ctx{
 		Context:  r.Context(),
@@ -261,11 +272,12 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 		UserID:     userID,
 		AuditOp:    auditOp,
 		Action:     action,
+		ObjectIDs:  objectIDs,
 		Baggage:    baggage,
 	}
 
-	// Dispatch.
-	result, err := handler.Dispatch(hctx, req.Params)
+	// Dispatch with params stripped of reserved keys.
+	result, err := handler.Dispatch(hctx, paramsWithoutReserved)
 	if err != nil {
 		var appErr *AppError
 		if errors.As(err, &appErr) {
@@ -292,4 +304,34 @@ func extractBearer(auth string) string {
 		return auth[7:]
 	}
 	return ""
+}
+
+// extractObjectIDs pulls the reserved `_object_ids` field from JSON-RPC params
+// and returns it plus the params with that key removed. Returns (nil, raw, nil)
+// when the field is absent (handler called without entity ids — fine for
+// invoke=unbound). Errors only on type mismatch.
+func extractObjectIDs(raw json.RawMessage) ([]string, json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, raw, nil
+	}
+	var bag map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &bag); err != nil {
+		// Not an object — pass through untouched (handler with positional/array
+		// params, or empty body). No object_ids to extract.
+		return nil, raw, nil
+	}
+	idsRaw, ok := bag["_object_ids"]
+	if !ok {
+		return nil, raw, nil
+	}
+	delete(bag, "_object_ids")
+	var ids []string
+	if err := json.Unmarshal(idsRaw, &ids); err != nil {
+		return nil, raw, fmt.Errorf("expected string array: %w", err)
+	}
+	cleaned, err := json.Marshal(bag)
+	if err != nil {
+		return nil, raw, fmt.Errorf("re-marshal params: %w", err)
+	}
+	return ids, cleaned, nil
 }

@@ -27,6 +27,18 @@ type Ctx struct {
 	AuditOp    string
 	Action     string
 
+	// ObjectIDs is the entity-row ids the platform invoked this handler with.
+	// Populated from the reserved `_object_ids` field in the JSON-RPC params
+	// envelope (extracted by the SDK before the handler's typed params are
+	// unmarshalled, so handlers see only their declared params plus this
+	// dedicated field).
+	//
+	// Length:
+	//   invoke: array (handler default)  → 0..N (whatever caller passed)
+	//   invoke: each                     → exactly 1 (platform fans out)
+	//   invoke: unbound                  → 0 (handler ignores ids)
+	ObjectIDs []string
+
 	// Baggage is the W3C baggage header value propagated from the platform.
 	Baggage string
 }
