@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -13,27 +14,67 @@ type DataClient struct {
 	c *Client
 }
 
-// ListParams configures a List request.
+// ListParams configures a List request. The server supports two pagination
+// modes picked by which params are non-zero:
+//
+//   - Cursor mode (default, O(log n), scales to millions of rows): set Limit
+//     and optionally After. Response includes Meta.HasMore and Meta.Cursor.
+//     Recommended for UIs, infinite scroll, batch processing.
+//
+//   - Offset mode (classic page/per_page, supports "page 47 of 100" UIs): set
+//     Page and PerPage. Response includes Meta.Total / Meta.TotalPages.
+//     COUNT(*) runs - more expensive on large tables.
+//
+// Do not mix modes - setting both cursor and offset params is ambiguous.
+// The server silently prefers cursor on conflict; the SDK matches that.
 type ListParams struct {
-	// Limit is the max number of records to return.
-	Limit int
-	// Offset is the pagination offset.
-	Offset int
-	// Sort is the sort field (prefix with - for descending).
-	Sort string
-	// Search is the full-text search query.
-	Search string
-	// Filters are field-level filters as query params (e.g. {"status": "active"}).
-	Filters map[string]string
+	// Cursor mode.
+	Limit int    // max rows per page; server clamps to 1-1000 (default 50).
+	After string // opaque cursor from a prior response's Meta.Cursor; empty = first page.
+
+	// Offset mode.
+	Page    int
+	PerPage int
+
+	// Shared across modes.
+	Sort    string       // field name; prefix "-" for descending; "$status.pipeline" for status sort.
+	Search  string       // full-text search against entity's configured search_fields.
+	Filters []FilterNode // structured filter tree (see filter.go). Serialized as JSON in `filters`.
+	Select  []string     // field projection; empty = all columns.
+
+	// IncludeCount opts into COUNT(*). Cursor mode omits count by default to
+	// save a query; set this true when the UI wants a total. Offset mode
+	// runs count unconditionally.
+	IncludeCount bool
+
+	// IncludeDeleted is permission-gated server-side (view_deleted). Silently
+	// ignored without the permission.
+	IncludeDeleted bool
 }
 
-// ListResponse is the paginated response from /api/data/{entity}.
+// ListMeta is pagination metadata returned with a List response. Fields are
+// mode-dependent: cursor mode populates HasMore/Cursor/Limit; offset mode
+// populates Page/PerPage/Total/TotalPages. Total is also populated in cursor
+// mode when ListParams.IncludeCount was true.
+type ListMeta struct {
+	Total      int64  `json:"total"`
+	Limit      int    `json:"limit"`
+	HasMore    bool   `json:"has_more"`
+	Cursor     string `json:"cursor,omitempty"`
+	Page       int    `json:"page,omitempty"`
+	PerPage    int    `json:"per_page,omitempty"`
+	TotalPages int    `json:"total_pages,omitempty"`
+}
+
+// ListResponse is the paginated response from GET /api/data/{entity}.
+// The server envelope is {"data": [...], "meta": {...}, "$refs": {...}};
+// this struct maps that envelope directly.
 type ListResponse struct {
-	Items      []map[string]any `json:"items"`
-	Total      int              `json:"total"`
-	Limit      int              `json:"limit"`
-	Offset     int              `json:"offset"`
-	TotalPages int              `json:"total_pages"`
+	Data []map[string]any `json:"data"`
+	Meta ListMeta         `json:"meta"`
+	// Refs carries expanded referenced entities (display-level resolution)
+	// under {entityCode: {id: {row}}}. Absent when the response has no refs.
+	Refs map[string]map[string]map[string]any `json:"$refs,omitempty"`
 }
 
 // Get retrieves a single record by ID.
@@ -61,13 +102,28 @@ func (d *DataClient) Get(ctx context.Context, entity, id string) (map[string]any
 }
 
 // List retrieves records with pagination and filters.
+//
+// See ListParams for pagination-mode selection. Query params emitted:
+//   - limit, after            - cursor mode
+//   - page, per_page          - offset mode
+//   - sort, search            - both modes
+//   - filters                 - JSON-encoded []FilterNode (omitted when empty)
+//   - select                  - comma-separated field list
+//   - include_count=true      - opt-in count in cursor mode
+//   - include_deleted=true    - permission-gated soft-deleted rows
 func (d *DataClient) List(ctx context.Context, entity string, params ListParams) (*ListResponse, error) {
 	q := url.Values{}
 	if params.Limit > 0 {
-		q.Set("limit", fmt.Sprintf("%d", params.Limit))
+		q.Set("limit", strconv.Itoa(params.Limit))
 	}
-	if params.Offset > 0 {
-		q.Set("offset", fmt.Sprintf("%d", params.Offset))
+	if params.After != "" {
+		q.Set("after", params.After)
+	}
+	if params.Page > 0 {
+		q.Set("page", strconv.Itoa(params.Page))
+	}
+	if params.PerPage > 0 {
+		q.Set("per_page", strconv.Itoa(params.PerPage))
 	}
 	if params.Sort != "" {
 		q.Set("sort", params.Sort)
@@ -75,16 +131,30 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 	if params.Search != "" {
 		q.Set("search", params.Search)
 	}
-	for k, v := range params.Filters {
-		q.Set(k, v)
+	if len(params.Filters) > 0 {
+		raw, err := json.Marshal(params.Filters)
+		if err != nil {
+			return nil, fmt.Errorf("marshal filters: %w", err)
+		}
+		q.Set("filters", string(raw))
+	}
+	if len(params.Select) > 0 {
+		q.Set("select", strings.Join(params.Select, ","))
+	}
+	if params.IncludeCount {
+		q.Set("include_count", "true")
+	}
+	if params.IncludeDeleted {
+		q.Set("include_deleted", "true")
 	}
 
-	body, status, err := d.c.do(ctx, "GET", fmt.Sprintf("/api/data/%s", entity), q, nil)
+	path := fmt.Sprintf("/api/data/%s", entity)
+	body, status, err := d.c.do(ctx, "GET", path, q, nil)
 	if err != nil {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: string(body), Path: fmt.Sprintf("/api/data/%s", entity)}
+		return nil, &APIError{StatusCode: status, Body: string(body), Path: path}
 	}
 	var result ListResponse
 	if err := json.Unmarshal(body, &result); err != nil {
