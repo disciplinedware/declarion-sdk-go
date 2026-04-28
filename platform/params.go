@@ -11,60 +11,88 @@ type ParamsClient struct {
 	c *Client
 }
 
-// paramWrapper is the API response envelope: {"data": {"code": ..., "value": ...}}.
-type paramWrapper struct {
+// paramLookupResponse mirrors the platform's wire envelope for
+// GET /api/params/{code}: HTTP 200 always, with {found, value?, source?}.
+// "found:false" means the parameter is undeclared, restricted-category,
+// or has no value at any resolution layer - the SDK substitutes the
+// caller's default. The default never crosses the wire.
+type paramLookupResponse struct {
 	Data struct {
-		Code  string `json:"code"`
-		Value any    `json:"value"`
+		Code   string `json:"code"`
+		Found  bool   `json:"found"`
+		Value  any    `json:"value,omitempty"`
+		Source string `json:"source,omitempty"`
+		Type   string `json:"type,omitempty"`
 	} `json:"data"`
 }
 
-// Get retrieves a single parameter by code, returning the raw value.
-// The platform resolves env var overrides server-side.
-func (p *ParamsClient) Get(ctx context.Context, code string) (any, error) {
+// Lookup fetches a parameter and reports whether the platform has a value
+// for it. found=false means the SDK caller should use its default;
+// found=true means the value is authoritative (even if it is nil/zero).
+// Transport errors propagate; "not found" is never an error.
+func (p *ParamsClient) Lookup(ctx context.Context, code string) (value any, found bool, source string, err error) {
 	path := fmt.Sprintf("/api/params/%s", code)
-	body, status, err := p.c.do(ctx, "GET", path, nil, nil)
-	if err != nil {
-		return nil, err
+	body, status, ferr := p.c.do(ctx, "GET", path, nil, nil)
+	if ferr != nil {
+		return nil, false, "", ferr
 	}
 	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: string(body), Path: path}
+		return nil, false, "", &APIError{StatusCode: status, Body: string(body), Path: path}
 	}
-	var result paramWrapper
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal param response: %w", err)
+	var result paramLookupResponse
+	if jerr := json.Unmarshal(body, &result); jerr != nil {
+		return nil, false, "", fmt.Errorf("unmarshal param response: %w", jerr)
 	}
-	return result.Data.Value, nil
+	return result.Data.Value, result.Data.Found, result.Data.Source, nil
 }
 
-// GetParam retrieves a platform parameter and converts it to the requested type.
-// Uses Go generics for type-safe parameter access. Accepts *ParamsClient + context.
+// GetParam retrieves a platform parameter and coerces it to T.
 //
-//	token, err := platform.GetParam[string](ctx.Platform.Params(), ctx.Context, "clickup_api_token")
-func GetParam[T any](p *ParamsClient, ctx context.Context, code string) (T, error) {
-	var zero T
-	raw, err := p.Get(ctx, code)
+// Contract:
+//   - Platform has a value     -> (value, nil). Explicit nil is honoured
+//     (zero T for non-pointer T, nil pointer for pointer T).
+//   - Platform reports not-found -> (def, nil). The default is used as-is;
+//     no error. Devs may call GetParam with new param codes before they
+//     are declared in YAML; that is intentional.
+//   - Coercion failure          -> (zero T, error). Indicates a programming
+//     bug (T mismatches stored type).
+//   - Transport / API failure   -> (zero T, err). Caller MUST propagate.
+//     Defaults are for absent values; broken infrastructure is an error.
+//
+// The default `def` never crosses the wire. The server doesn't track caller
+// defaults, so two callers with different defaults always see consistent
+// server state.
+//
+//	token, err := platform.GetParam[string](p, ctx, "clickup_api_token", "")
+//	maxRetries, err := platform.GetParam[int](p, ctx, "max_retries", 3)
+//	enabled, err := platform.GetParam[bool](p, ctx, "feature_flag", false)
+func GetParam[T any](p *ParamsClient, ctx context.Context, code string, def T) (T, error) {
+	value, found, _, err := p.Lookup(ctx, code)
 	if err != nil {
+		var zero T
 		return zero, err
 	}
-	if raw == nil {
-		return zero, nil
+	if !found {
+		return def, nil
 	}
 
-	// Try direct type assertion first (covers string, bool, float64 from JSON).
-	if v, ok := raw.(T); ok {
+	// Direct type assertion fast path.
+	if v, ok := value.(T); ok {
 		return v, nil
 	}
 
-	// Fall back to JSON round-trip for numeric conversions (JSON numbers are float64,
-	// caller may want int, int64, etc.).
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return zero, fmt.Errorf("param %q: marshal for conversion: %w", code, err)
+	// JSON round-trip handles numeric widths (JSON numbers arrive as
+	// float64), struct shapes, multilang/locale maps, and explicit
+	// nil values (json.Unmarshal of `null` -> zero T / nil pointer).
+	b, merr := json.Marshal(value)
+	if merr != nil {
+		var zero T
+		return zero, fmt.Errorf("param %q: marshal for conversion: %w", code, merr)
 	}
 	var result T
-	if err := json.Unmarshal(b, &result); err != nil {
-		return zero, fmt.Errorf("param %q: cannot convert to %T: %w", code, zero, err)
+	if uerr := json.Unmarshal(b, &result); uerr != nil {
+		var zero T
+		return zero, fmt.Errorf("param %q: cannot convert stored %T to %T: %w", code, value, result, uerr)
 	}
 	return result, nil
 }
