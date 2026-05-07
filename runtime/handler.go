@@ -10,16 +10,26 @@ import (
 type HandlerFunc[P any, R any] func(ctx *Ctx, params P) (R, error)
 
 // HandlerRegistration is a method-name to dispatch-function mapping.
+// Metadata carries optional option values set via HandlerOption functions;
+// it is read by GenerateHandlersYAML and ignored by Serve.
 type HandlerRegistration struct {
-	Method  string
+	Method   string
 	Dispatch func(ctx *Ctx, rawParams json.RawMessage) (any, error)
+	Metadata HandlerMetadata
 }
 
 // Handler creates a HandlerRegistration from a typed handler function.
 // The method name is the JSON-RPC method the platform will call (e.g. "clickup.fetch").
-func Handler[P any, R any](method string, fn HandlerFunc[P, R]) HandlerRegistration {
+// Optional HandlerOption values (Timeout, NameEN, NameRU, Retry, Async) attach
+// metadata consumed by the YAML generator; they have no effect on Serve dispatch.
+func Handler[P any, R any](method string, fn HandlerFunc[P, R], opts ...HandlerOption) HandlerRegistration {
+	var meta HandlerMetadata
+	for _, o := range opts {
+		o(&meta)
+	}
 	return HandlerRegistration{
-		Method: method,
+		Method:   method,
+		Metadata: meta,
 		Dispatch: func(ctx *Ctx, rawParams json.RawMessage) (any, error) {
 			var params P
 			if len(rawParams) > 0 {
