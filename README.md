@@ -140,7 +140,7 @@ actions:
 - `X-Declarion-Protocol-Version` assertion
 - Typed `ctx.Platform.Data()` client for `/api/data/{entity}` (Get, List, Create, Update, Delete, BulkUpsert)
 - Typed `ctx.Platform.Actions()` client for `/api/actions/{code}` (Invoke)
-- Structured logging via `ctx.Logger` (slog, pre-tagged with handler/tenant/user/audit_op)
+- Structured logging via `ctx.Logger` (`go.uber.org/zap`, pre-tagged with handler/tenant/user/audit_op)
 - SIGTERM graceful shutdown
 - `/health` endpoint for readiness probes
 
