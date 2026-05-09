@@ -99,9 +99,19 @@ func (c *Config) withDefaults() {
 func Serve(cfg Config, handlers ...HandlerRegistration) error {
 	cfg.withDefaults()
 
-	// Startup warnings for misconfiguration.
+	// Startup gates. Missing JWT secret is fatal when token verification
+	// is required: accepting unverified continuation tokens would let any
+	// caller mint an arbitrary identity and reach handlers as that user.
+	// Tests that need the unverified-parse path can leave RequireToken=false
+	// AND set DECLARION_SIDECAR_ALLOW_UNVERIFIED=1 explicitly.
 	if cfg.JWTSecret == "" {
-		cfg.Logger.Warn("DECLARION_JWT_SECRET not set: continuation tokens will NOT be signature-verified (trusting network boundary)")
+		if cfg.RequireToken {
+			return fmt.Errorf("DECLARION_JWT_SECRET is required when RequireToken=true; refusing to start with unverified token parsing")
+		}
+		if os.Getenv("DECLARION_SIDECAR_ALLOW_UNVERIFIED") != "1" {
+			return fmt.Errorf("DECLARION_JWT_SECRET is empty; set the env var or DECLARION_SIDECAR_ALLOW_UNVERIFIED=1 (test-only) to enable unverified token parsing")
+		}
+		cfg.Logger.Warn("DECLARION_JWT_SECRET empty and DECLARION_SIDECAR_ALLOW_UNVERIFIED=1: continuation tokens parsed without signature verification (test-only mode; do not use in production)")
 	}
 	if cfg.PlatformURL == "" {
 		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
