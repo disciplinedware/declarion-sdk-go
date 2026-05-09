@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,6 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"go.uber.org/zap"
 )
 
 // startContainers starts Postgres + Declarion via testcontainers-go on a shared network.
@@ -107,7 +107,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	if migrateLogs != nil {
 		logBytes, _ := io.ReadAll(migrateLogs)
 		_ = migrateLogs.Close()
-		cfg.logger.Info("migration completed", "logs", string(logBytes))
+		cfg.logger.Info("migration completed", zap.String("logs", string(logBytes)))
 	}
 	_ = migrateContainer.Terminate(ctx)
 
@@ -175,7 +175,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		return nil, fmt.Errorf("bootstrap tenant: %w", err)
 	}
 
-	cfg.logger.Info("platform started", "url", url)
+	cfg.logger.Info("platform started", zap.String("url", url))
 
 	env := &PlatformEnv{
 		URL:              url,
@@ -185,10 +185,10 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		stopFn: func() {
 			termCtx := context.Background()
 			if err := declarionContainer.Terminate(termCtx); err != nil {
-				slog.Warn("stop declarion container", "error", err)
+				cfg.logger.Warn("stop declarion container", zap.Error(err))
 			}
 			if err := pgContainer.Terminate(termCtx); err != nil {
-				slog.Warn("stop postgres container", "error", err)
+				cfg.logger.Warn("stop postgres container", zap.Error(err))
 			}
 			_ = net.Remove(termCtx)
 			cleanupModuleDir()

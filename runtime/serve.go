@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
@@ -52,8 +53,9 @@ type Config struct {
 	// When false (default), requests without tokens succeed with empty identity fields.
 	RequireToken bool
 
-	// Logger overrides the default structured logger.
-	Logger *slog.Logger
+	// Logger overrides the default structured logger. Defaults to a zap
+	// production logger; tests can pass zaptest or zap.NewNop().
+	Logger *zap.Logger
 
 	// ShutdownTimeout is the graceful shutdown deadline (default 10s).
 	ShutdownTimeout time.Duration
@@ -74,7 +76,18 @@ func (c *Config) withDefaults() {
 		c.JWTSecret = os.Getenv("DECLARION_JWT_SECRET")
 	}
 	if c.Logger == nil {
-		c.Logger = slog.Default()
+		// Production-grade JSON logger. Sidecar callers running under
+		// systemd / k8s expect structured fields, not plain text. tests
+		// inject zap.NewNop() / zaptest.NewLogger.
+		l, err := zap.NewProduction()
+		if err != nil {
+			// zap.NewProduction can fail only on a malformed
+			// hard-coded config; surface the misconfiguration rather
+			// than swallow it via a Nop fallback that would hide every
+			// runtime warning the sidecar emits.
+			panic(fmt.Sprintf("declarion-sdk: build production zap logger: %v", err))
+		}
+		c.Logger = l
 	}
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = 10 * time.Second
@@ -125,8 +138,8 @@ func Serve(cfg Config, handlers ...HandlerRegistration) error {
 	}
 
 	cfg.Logger.Info("sidecar starting",
-		"addr", cfg.Addr,
-		"handlers", len(registry),
+		zap.String("addr", cfg.Addr),
+		zap.Int("handlers", len(registry)),
 	)
 
 	// Graceful shutdown on SIGTERM/SIGINT.
@@ -143,7 +156,7 @@ func Serve(cfg Config, handlers ...HandlerRegistration) error {
 
 	select {
 	case sig := <-sigCh:
-		cfg.Logger.Info("received signal, shutting down", "signal", sig)
+		cfg.Logger.Info("received signal, shutting down", zap.Stringer("signal", sig))
 	case err := <-errCh:
 		if err != nil {
 			return err
@@ -226,7 +239,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 	if token != "" {
 		claims, err := parseHandlerToken(token, cfg.JWTSecret)
 		if err != nil {
-			cfg.Logger.Warn("invalid continuation token", "error", err, "method", req.Method)
+			cfg.Logger.Warn("invalid continuation token", zap.Error(err), zap.String("method", req.Method))
 			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
 				"invalid continuation token", CodePermissionDenied, false))
 			return
@@ -262,10 +275,10 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 		Context:  r.Context(),
 		Platform: platClient,
 		Logger: cfg.Logger.With(
-			"method", req.Method,
-			"tenant_id", tenantID,
-			"user_id", userID,
-			"audit_op", auditOp,
+			zap.String("method", req.Method),
+			zap.String("tenant_id", tenantID),
+			zap.String("user_id", userID),
+			zap.String("audit_op", auditOp),
 		),
 		TenantID:   tenantID,
 		TenantCode: tenantCode,
@@ -284,7 +297,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, appErr.Code,
 				appErr.Message, appErr.DeclarionCode, appErr.Retryable))
 		} else {
-			cfg.Logger.Error("handler error", "method", req.Method, "error", err)
+			cfg.Logger.Error("handler error", zap.String("method", req.Method), zap.Error(err))
 			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInternalError,
 				err.Error(), CodeInternal, false))
 		}

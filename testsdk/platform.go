@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"go.uber.org/zap"
 
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 	"github.com/disciplinedware/declarion-sdk-go/runtime"
@@ -38,7 +38,7 @@ type PlatformEnv struct {
 	JWTSecret string
 
 	stopFn          func()
-	logger          *slog.Logger
+	logger          *zap.Logger
 	serverContainer interface{ Logs(context.Context) (io.ReadCloser, error) }
 }
 
@@ -67,7 +67,7 @@ type config struct {
 	image         string
 	jwtSecret     string
 	containerEnv  map[string]string
-	logger        *slog.Logger
+	logger        *zap.Logger
 }
 
 // WithSchema sets the consumer schema directory to mount into the Declarion container.
@@ -96,7 +96,7 @@ func WithJWTSecret(secret string) Option {
 }
 
 // WithLogger overrides the default test logger.
-func WithLogger(l *slog.Logger) Option {
+func WithLogger(l *zap.Logger) Option {
 	return func(c *config) { c.logger = l }
 }
 
@@ -116,7 +116,7 @@ func StartPlatform(opts ...Option) (*PlatformEnv, error) {
 		image:      "declarion:latest",
 		jwtSecret:  defaultJWTSecret,
 		moduleName: "test-consumer",
-		logger:     slog.Default(),
+		logger:     zap.NewNop(),
 	}
 	for _, o := range opts {
 		o(cfg)
@@ -137,7 +137,7 @@ func StartPlatform(opts ...Option) (*PlatformEnv, error) {
 		if err := env.waitForHealth(10 * time.Second); err != nil {
 			return nil, fmt.Errorf("external platform not healthy: %w", err)
 		}
-		cfg.logger.Info("using external platform", "url", env.URL)
+		cfg.logger.Info("using external platform", zap.String("url", env.URL))
 		return env, nil
 	}
 
@@ -194,7 +194,7 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 	ctx := &runtime.Ctx{
 		Context:    context.Background(),
 		Platform:   platClient,
-		Logger:     slog.Default().With("test", t.Name(), "tenant", cfg.tenantCode),
+		Logger:     zap.NewNop().With(zap.String("test", t.Name()), zap.String("tenant", cfg.tenantCode)),
 		TenantID:   systemTenantID,
 		TenantCode: cfg.tenantCode,
 		UserID:     cfg.userID,

@@ -2,7 +2,8 @@ package runtime
 
 import (
 	"context"
-	"log/slog"
+
+	"go.uber.org/zap"
 
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
@@ -17,8 +18,10 @@ type Ctx struct {
 	// All outbound calls auto-attach the continuation token and trace headers.
 	Platform *platform.Client
 
-	// Logger is a structured logger pre-tagged with handler, tenant, user, and trace IDs.
-	Logger *slog.Logger
+	// Logger is a structured zap logger pre-tagged with handler,
+	// tenant, user, and audit-op IDs. Handlers add their own fields
+	// via .With(zap.String(...)) for per-call attribution.
+	Logger *zap.Logger
 
 	// Identity holds claims from the continuation token.
 	TenantID   string
