@@ -84,6 +84,14 @@ func parseHandlerToken(tokenString string, jwtSecret string) (*HandlerClaims, er
 	if claims.Scope != HandlerTokenScope {
 		return nil, fmt.Errorf("invalid handler token scope: %s", claims.Scope)
 	}
+	// Identity-claim guards mirror declarion-core's HandlerTokenManager
+	// (handler_token.go::Validate). A token whose payload is missing
+	// UserID / TenantID / Action is malformed regardless of signature;
+	// without these checks a sidecar handler would receive an anonymous
+	// principal and could mistake it for a legitimately empty caller.
+	if claims.UserID == "" || claims.TenantID == "" || claims.Action == "" {
+		return nil, fmt.Errorf("handler token missing required identity claim (uid/tid/action)")
+	}
 
 	return claims, nil
 }
