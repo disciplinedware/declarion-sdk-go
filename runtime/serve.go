@@ -234,8 +234,12 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 		return
 	}
 
-	// Parse claims from token (identity extraction).
-	var tenantID, tenantCode, userID, auditOp, action string
+	// Parse claims from token (identity + authority extraction).
+	var (
+		tenantID, tenantCode, userID, auditOp, action string
+		permissions                                   []string
+		isSuperadmin, isTenantOwner, isGlobalUser     bool
+	)
 	if token != "" {
 		claims, err := parseHandlerToken(token, cfg.JWTSecret)
 		if err != nil {
@@ -249,6 +253,10 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 		userID = claims.UserID
 		auditOp = claims.AuditOpID
 		action = claims.Action
+		permissions = claims.Permissions
+		isSuperadmin = claims.IsSuperadmin
+		isTenantOwner = claims.IsTenantOwner
+		isGlobalUser = claims.IsGlobalUser
 	}
 
 	// Build platform client.
@@ -280,13 +288,17 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 			zap.String("user_id", userID),
 			zap.String("audit_op", auditOp),
 		),
-		TenantID:   tenantID,
-		TenantCode: tenantCode,
-		UserID:     userID,
-		AuditOp:    auditOp,
-		Action:     action,
-		ObjectIDs:  objectIDs,
-		Baggage:    baggage,
+		TenantID:      tenantID,
+		TenantCode:    tenantCode,
+		UserID:        userID,
+		AuditOp:       auditOp,
+		Action:        action,
+		Permissions:   permissions,
+		IsSuperadmin:  isSuperadmin,
+		IsTenantOwner: isTenantOwner,
+		IsGlobalUser:  isGlobalUser,
+		ObjectIDs:     objectIDs,
+		Baggage:       baggage,
 	}
 
 	// Dispatch with params stripped of reserved keys.

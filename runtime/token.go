@@ -14,30 +14,50 @@ const (
 	HandlerTokenScope = "handler"
 )
 
-// HandlerClaims mirrors declarion-core's auth.HandlerClaims.
+// HandlerClaims mirrors declarion-core's auth.HandlerClaims (see
+// declarion-core/golang/internal/auth/handler_token.go).
 // Exported so the conformance harness and tests can use the same type.
 type HandlerClaims struct {
 	jwt.RegisteredClaims
 	UserID     string `json:"uid"`
 	TenantID   string `json:"tid"`
 	TenantCode string `json:"tcode"`
-	Action     string `json:"action"`
-	AuditOpID  string `json:"audit_op"`
-	Scope      string `json:"scope"`
+	// Permissions is the caller's resolved permission list as of token
+	// mint. Sidecar handlers gate fine-grained operations with these.
+	Permissions []string `json:"perms"`
+	// Authority dimensions baked into the token at mint. Sidecar
+	// handlers running inside the SDK enforce authority gates via
+	// these booleans (cross-tenant decisions, owner-reserved actions,
+	// etc.) without re-querying the DB.
+	IsSuperadmin  bool   `json:"is_superadmin,omitempty"`
+	IsTenantOwner bool   `json:"is_tenant_owner,omitempty"`
+	IsGlobalUser  bool   `json:"is_global_user,omitempty"`
+	Action        string `json:"action"`
+	AuditOpID     string `json:"audit_op"`
+	Scope         string `json:"scope"`
 }
 
 // parseHandlerToken validates and extracts claims from a continuation token.
 // If jwtSecret is empty, the token is decoded without signature verification
 // (useful for testing or when the sidecar trusts the network boundary).
 func parseHandlerToken(tokenString string, jwtSecret string) (*HandlerClaims, error) {
-	opts := []jwt.ParserOption{jwt.WithAudience(HandlerTokenAudience), jwt.WithIssuer("declarion"), jwt.WithExpirationRequired()}
+	// Pin HS256 only — match the platform mint side
+	// (declarion-core/internal/auth/handler_token.go::Mint). Accepting
+	// sibling HMAC methods (HS384/HS512) widens the signing-method
+	// surface unnecessarily and risks alg-confusion attacks.
+	opts := []jwt.ParserOption{
+		jwt.WithAudience(HandlerTokenAudience),
+		jwt.WithIssuer("declarion"),
+		jwt.WithExpirationRequired(),
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+	}
 
 	var token *jwt.Token
 	var err error
 
 	if jwtSecret != "" {
 		token, err = jwt.ParseWithClaims(tokenString, &HandlerClaims{}, func(t *jwt.Token) (any, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			if t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 			}
 			return []byte(jwtSecret), nil

@@ -30,6 +30,18 @@ type Ctx struct {
 	AuditOp    string
 	Action     string
 
+	// Permissions is the caller's resolved permission list. Sidecar
+	// handlers gate fine-grained operations with these.
+	Permissions []string
+
+	// Authority dimensions baked into the continuation token at mint.
+	// Sidecar handlers enforce authority gates via these booleans
+	// (cross-tenant decisions, owner-reserved actions, etc.) without
+	// re-querying the DB. Mirrors the platform's engine.HandlerCtx.
+	IsSuperadmin  bool
+	IsTenantOwner bool
+	IsGlobalUser  bool
+
 	// ObjectIDs is the entity-row ids the platform invoked this handler with.
 	// Populated from the reserved `_object_ids` field in the JSON-RPC params
 	// envelope (extracted by the SDK before the handler's typed params are
