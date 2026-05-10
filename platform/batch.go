@@ -37,14 +37,32 @@ type BatchResponse struct {
 // The batch is sync + atomic by definition: Execute returns once the
 // platform has committed (or rolled back) the entire transaction.
 type Batch struct {
-	c   *Client
-	ops []BatchOp
+	c          *Client
+	ops        []BatchOp
+	tenantID   string
+	tenantCode string
 }
 
 // NewBatch starts a new system.batch builder. The returned builder is not
 // safe for concurrent use; share results, not the builder.
 func (c *Client) NewBatch() *Batch {
 	return &Batch{c: c}
+}
+
+// WithTargetTenantID sends X-Declarion-Tenant-ID for this batch execution.
+// Mutually exclusive with WithTargetTenantCode; the last call wins.
+func (b *Batch) WithTargetTenantID(tenantID string) *Batch {
+	b.tenantID = tenantID
+	b.tenantCode = ""
+	return b
+}
+
+// WithTargetTenantCode sends X-Declarion-Tenant-Code for this batch execution.
+// Mutually exclusive with WithTargetTenantID; the last call wins.
+func (b *Batch) WithTargetTenantCode(tenantCode string) *Batch {
+	b.tenantCode = tenantCode
+	b.tenantID = ""
+	return b
 }
 
 // Call adds one op to the batch. action is the registered action code
@@ -89,7 +107,7 @@ func (b *Batch) Execute(ctx context.Context) (*BatchResponse, error) {
 		"actions": b.ops,
 		"atomic":  true,
 	}
-	respBody, status, err := b.c.do(ctx, "POST", "/api/actions/system.batch", nil, body)
+	respBody, status, err := b.c.do(ctx, "POST", "/api/actions/system.batch", nil, body, targetTenantOptions(b.tenantID, b.tenantCode)...)
 	if err != nil {
 		return nil, err
 	}

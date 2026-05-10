@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/network"
@@ -70,10 +71,13 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		},
 		Started: true,
 	}
-	if mm != nil {
-		migrateReq.ContainerRequest.Mounts = mm.mounts()
+	attachModuleBinds(&migrateReq, mm)
+	if err := network.WithNetwork([]string{"test-migrate"}, net)(&migrateReq); err != nil {
+		cleanupModuleDir()
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		return nil, fmt.Errorf("configure migration network: %w", err)
 	}
-	network.WithNetwork([]string{"test-migrate"}, net)(&migrateReq)
 
 	migrateContainer, err := testcontainers.GenericContainer(ctx, migrateReq)
 	if err != nil {
@@ -123,8 +127,8 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	}
 	declarionReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
-			Image: cfg.image,
-			Env:   serverEnv,
+			Image:        cfg.image,
+			Env:          serverEnv,
 			ExposedPorts: []string{"3000/tcp"},
 			WaitingFor: wait.ForHTTP("/api/health").
 				WithPort("3000/tcp").
@@ -132,10 +136,13 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		},
 		Started: true,
 	}
-	if mm != nil {
-		declarionReq.ContainerRequest.Mounts = mm.mounts()
+	attachModuleBinds(&declarionReq, mm)
+	if err := network.WithNetwork([]string{"test-declarion"}, net)(&declarionReq); err != nil {
+		cleanupModuleDir()
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		return nil, fmt.Errorf("configure declarion network: %w", err)
 	}
-	network.WithNetwork([]string{"test-declarion"}, net)(&declarionReq)
 
 	declarionContainer, err := testcontainers.GenericContainer(ctx, declarionReq)
 	if err != nil {
@@ -178,10 +185,10 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	cfg.logger.Info("platform started", zap.String("url", url))
 
 	env := &PlatformEnv{
-		URL:              url,
-		JWTSecret:        cfg.jwtSecret,
-		logger:           cfg.logger,
-		serverContainer:  declarionContainer,
+		URL:             url,
+		JWTSecret:       cfg.jwtSecret,
+		logger:          cfg.logger,
+		serverContainer: declarionContainer,
 		stopFn: func() {
 			termCtx := context.Background()
 			if err := declarionContainer.Terminate(termCtx); err != nil {
@@ -277,20 +284,33 @@ func buildModuleMount(cfg *config) (*moduleMount, error) {
 	}
 	return m, nil
 }
+func attachModuleBinds(req *testcontainers.GenericContainerRequest, m *moduleMount) {
+	if req == nil || m == nil {
+		return
+	}
+	binds := m.binds()
+	prev := req.HostConfigModifier
+	req.HostConfigModifier = func(hostConfig *container.HostConfig) {
+		if prev != nil {
+			prev(hostConfig)
+		}
+		hostConfig.Binds = append(hostConfig.Binds, binds...)
+	}
+}
 
-// mounts returns the bind mounts for a container. Each real directory gets its
+// binds returns the host binds for a container. Each real directory gets its
 // own mount (no symlinks - Docker bind mounts don't follow host-side symlinks).
-func (m *moduleMount) mounts() testcontainers.ContainerMounts {
+func (m *moduleMount) binds() []string {
 	base := fmt.Sprintf("/app/modules/%s", m.moduleName)
-	result := testcontainers.ContainerMounts{
+	result := []string{
 		// Manifest lives in the temp dir.
-		testcontainers.BindMount(m.manifestDir+"/manifest.yaml", testcontainers.ContainerMountTarget(base+"/manifest.yaml")),
+		fmt.Sprintf("%s:%s", filepath.Join(m.manifestDir, "manifest.yaml"), base+"/manifest.yaml"),
 	}
 	if m.schemaDir != "" {
-		result = append(result, testcontainers.BindMount(m.schemaDir, testcontainers.ContainerMountTarget(base+"/schema")))
+		result = append(result, fmt.Sprintf("%s:%s", m.schemaDir, base+"/schema"))
 	}
 	if m.migrDir != "" {
-		result = append(result, testcontainers.BindMount(m.migrDir, testcontainers.ContainerMountTarget(base+"/migrations")))
+		result = append(result, fmt.Sprintf("%s:%s", m.migrDir, base+"/migrations"))
 	}
 	return result
 }

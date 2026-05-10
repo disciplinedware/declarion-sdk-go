@@ -24,6 +24,12 @@ type InvokeParams struct {
 	// IDs are the object IDs for single/batch-scope actions. Forbidden
 	// for global-scope actions.
 	IDs []string
+	// TargetTenantID sends X-Declarion-Tenant-ID for this invocation.
+	// Mutually exclusive with TargetTenantCode.
+	TargetTenantID string
+	// TargetTenantCode sends X-Declarion-Tenant-Code for this invocation.
+	// Mutually exclusive with TargetTenantID.
+	TargetTenantCode string
 }
 
 // InvokeResult is the response from an action invocation.
@@ -43,7 +49,7 @@ func (a *ActionsClient) Invoke(ctx context.Context, code string, params InvokePa
 	if params.IDs != nil {
 		body["_ids"] = params.IDs
 	}
-	respBody, status, err := a.c.do(ctx, "POST", fmt.Sprintf("/api/actions/%s", code), nil, body)
+	respBody, status, err := a.c.do(ctx, "POST", fmt.Sprintf("/api/actions/%s", code), nil, body, targetTenantOptions(params.TargetTenantID, params.TargetTenantCode)...)
 	if err != nil {
 		return nil, err
 	}

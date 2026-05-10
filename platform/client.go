@@ -23,6 +23,13 @@ import (
 // JSON parse error downstream.
 const MaxResponseSize int64 = 100 * 1024 * 1024
 
+// Target-tenant headers let API clients execute a request in a tenant that is
+// different from the credential's home tenant. Set at most one per request.
+const (
+	TargetTenantIDHeader   = "X-Declarion-Tenant-ID"
+	TargetTenantCodeHeader = "X-Declarion-Tenant-Code"
+)
+
 // Config configures the platform client.
 type Config struct {
 	// BaseURL is the Declarion platform base URL (e.g. "http://declarion:3000").
@@ -37,6 +44,14 @@ type Config struct {
 	// Baggage is the W3C baggage header propagated on every callback.
 	Baggage string
 
+	// TargetTenantID sends X-Declarion-Tenant-ID on every request. Mutually
+	// exclusive with TargetTenantCode.
+	TargetTenantID string
+
+	// TargetTenantCode sends X-Declarion-Tenant-Code on every request. Mutually
+	// exclusive with TargetTenantID.
+	TargetTenantCode string
+
 	// HTTPClient overrides the default HTTP client. Useful for testing.
 	HTTPClient *http.Client
 }
@@ -48,6 +63,8 @@ type Client struct {
 	token       string
 	traceparent string
 	baggage     string
+	tenantID    string
+	tenantCode  string
 	http        *http.Client
 }
 
@@ -62,8 +79,44 @@ func New(cfg Config) *Client {
 		token:       cfg.Token,
 		traceparent: cfg.Traceparent,
 		baggage:     cfg.Baggage,
+		tenantID:    cfg.TargetTenantID,
+		tenantCode:  cfg.TargetTenantCode,
 		http:        httpClient,
 	}
+}
+
+// RequestOption customizes one platform request.
+type RequestOption func(*requestOptions)
+
+type requestOptions struct {
+	tenantID   string
+	tenantCode string
+}
+
+// WithTargetTenantID sends X-Declarion-Tenant-ID for this request.
+func WithTargetTenantID(tenantID string) RequestOption {
+	return func(o *requestOptions) {
+		o.tenantID = tenantID
+		o.tenantCode = ""
+	}
+}
+
+// WithTargetTenantCode sends X-Declarion-Tenant-Code for this request.
+func WithTargetTenantCode(tenantCode string) RequestOption {
+	return func(o *requestOptions) {
+		o.tenantCode = tenantCode
+		o.tenantID = ""
+	}
+}
+
+func targetTenantOptions(tenantID, tenantCode string) []RequestOption {
+	if tenantID != "" || tenantCode != "" {
+		return []RequestOption{func(o *requestOptions) {
+			o.tenantID = tenantID
+			o.tenantCode = tenantCode
+		}}
+	}
+	return nil
 }
 
 // Token returns the continuation token this client uses.
@@ -91,9 +144,18 @@ func (c *Client) Params() *ParamsClient {
 }
 
 // do executes an HTTP request with all required headers.
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any) ([]byte, int, error) {
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) ([]byte, int, error) {
 	if c.baseURL == "" {
 		return nil, 0, fmt.Errorf("platform client: BaseURL not configured (set DECLARION_PLATFORM_URL)")
+	}
+	ro := requestOptions{tenantID: c.tenantID, tenantCode: c.tenantCode}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&ro)
+		}
+	}
+	if ro.tenantID != "" && ro.tenantCode != "" {
+		return nil, 0, fmt.Errorf("platform client: target tenant id and code are mutually exclusive")
 	}
 
 	var bodyReader io.Reader
@@ -132,6 +194,12 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	if c.baggage != "" {
 		req.Header.Set("baggage", c.baggage)
+	}
+	if ro.tenantID != "" {
+		req.Header.Set(TargetTenantIDHeader, ro.tenantID)
+	}
+	if ro.tenantCode != "" {
+		req.Header.Set(TargetTenantCodeHeader, ro.tenantCode)
 	}
 
 	resp, err := c.http.Do(req)

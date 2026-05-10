@@ -85,6 +85,30 @@ func TestBatch_ExecuteRoundtrip(t *testing.T) {
 	}
 }
 
+func TestBatch_ExecuteSendsTargetTenantHeader(t *testing.T) {
+	targetTenantID := "11111111-1111-1111-1111-111111111111"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(TargetTenantIDHeader); got != targetTenantID {
+			t.Errorf("%s = %q, want %q", TargetTenantIDHeader, got, targetTenantID)
+		}
+		if got := r.Header.Get(TargetTenantCodeHeader); got != "" {
+			t.Errorf("%s = %q, want empty", TargetTenantCodeHeader, got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","result":{"committed":true,"results":[{"index":0,"ok":true}]}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	_, err := c.NewBatch().
+		WithTargetTenantID(targetTenantID).
+		Call("a.b", nil).
+		Execute(t.Context())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+}
+
 func TestBatch_ExecuteSurfacesLogicalFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
