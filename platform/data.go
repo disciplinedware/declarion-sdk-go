@@ -77,12 +77,30 @@ type ListResponse struct {
 	Refs map[string]map[string]map[string]any `json:"$refs,omitempty"`
 }
 
-// Get retrieves a single record by ID.
+// Get retrieves a single record by primary key.
+//
+// Core has no path-style /{entity}/{id} read route. Single-record reads go
+// through GET /api/data/{entity}: the List handler returns one record when
+// the query carries every primary-key field of the entity (core data.go ->
+// extractPKFromQuery -> entity.PrimaryKeyFields()), otherwise it lists.
+//
+// pk maps primary-key field names to values - {"id": "<uuid>"} for the
+// standard single-id PK, or every field of a composite key. Every PK field
+// MUST be present, or core falls through to list mode and the response
+// shape will not match.
+//
 // The platform wraps the response in {"data": {...}}; this method unwraps it
 // and returns the inner object directly.
-func (d *DataClient) Get(ctx context.Context, entity, id string) (map[string]any, error) {
-	path := fmt.Sprintf("/api/data/%s/%s", entity, id)
-	body, status, err := d.c.do(ctx, "GET", path, nil, nil)
+func (d *DataClient) Get(ctx context.Context, entity string, pk map[string]any) (map[string]any, error) {
+	if len(pk) == 0 {
+		return nil, fmt.Errorf("data get %s: pk must contain at least one primary-key field", entity)
+	}
+	path := fmt.Sprintf("/api/data/%s", entity)
+	q := url.Values{}
+	for field, value := range pk {
+		q.Set(field, fmt.Sprint(value))
+	}
+	body, status, err := d.c.do(ctx, "GET", path, q, nil)
 	if err != nil {
 		return nil, err
 	}
