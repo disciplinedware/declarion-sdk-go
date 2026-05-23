@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.5.0] - 2026-05-23
+
 ### Changed
 
 - **BREAKING (wire contract).** `platform.DataClient.Update` now POSTs to
