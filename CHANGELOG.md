@@ -6,6 +6,36 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (wire contract).** `platform.DataClient.Update` now POSTs to
+  `/api/actions/{entity}.__update` (request body `{entity, items}`, response
+  envelope `{status, result: {rows, rows_matched}, audit_operation_id}`) instead
+  of the retired `PATCH /api/data/{entity}` CRUD route. Method signature is
+  unchanged - existing callers compile - but the SDK now requires
+  declarion-core `>= 0.4.x` (unified-action-toolbar migration; PATCH route is
+  gone server-side). Routes through the action dispatcher so permission
+  gating, ABAC, audit, and `$on_before_update` / `$on_updated` lifecycle
+  events flow through the canonical chokepoint.
+
+### Fixed
+
+- **`platform.DataClient.Delete` is no longer a 410-Gone live bug.** It now
+  POSTs to `/api/actions/{entity}.__delete` with `{"_ids": [...]}` (the
+  platform default delete action) instead of the retired
+  `POST /api/data/{entity}/delete` CRUD route. Single-column PK values pass
+  through verbatim. Composite-PK callers must pre-encode their object IDs;
+  attempting to delete with a multi-field PK map now errors loudly rather
+  than silently emitting a randomly-ordered object ID that would mismatch
+  `store.SplitObjectID` server-side.
+
+### Compatibility
+
+Wire-contract changes against declarion-core. External consumers pinned to
+the previous Update/Delete behavior must upgrade declarion-core in lock-step
+with this SDK release. Plan to publish under a major-version bump when the
+next tag cuts.
+
 ## [0.4.0] - 2026-05-07
 
 ### Added

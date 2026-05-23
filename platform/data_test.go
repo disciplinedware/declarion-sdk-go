@@ -2,6 +2,7 @@ package platform
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -316,6 +317,194 @@ func TestList_http_error(t *testing.T) {
 	}
 	if !strings.Contains(apiErr.Body, "VALIDATION") {
 		t.Errorf("body not preserved: %q", apiErr.Body)
+	}
+}
+
+// TestUpdate_routes_through_action_api asserts DataClient.Update POSTs to
+// /api/actions/{entity}.__update with the data.update handler body shape
+// ({entity, items}) and unwraps result.rows from the {status, result,
+// audit_operation_id} envelope. Pins the migration off the legacy
+// PATCH /api/data/{entity} route.
+func TestUpdate_routes_through_action_api(t *testing.T) {
+	var capturedPath string
+	var capturedMethod string
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		capturedMethod = r.Method
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"status": "ok",
+			"result": {
+				"rows": [
+					{"id": "u1", "name": "Alice", "$row_version": 2}
+				],
+				"rows_matched": 1
+			},
+			"audit_operation_id": "op-abc"
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	in := []map[string]any{{"id": "u1", "name": "Alice"}}
+	rows, err := c.Data().Update(t.Context(), "lead", in)
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	if capturedMethod != "POST" {
+		t.Errorf("method: got %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/actions/lead.__update" {
+		t.Errorf("path: got %q, want /api/actions/lead.__update", capturedPath)
+	}
+	if got, _ := capturedBody["entity"].(string); got != "lead" {
+		t.Errorf("body.entity: got %q, want lead", got)
+	}
+	items, ok := capturedBody["items"].([]any)
+	if !ok {
+		t.Fatalf("body.items: got %T, want []any", capturedBody["items"])
+	}
+	if len(items) != 1 {
+		t.Fatalf("body.items len: got %d, want 1", len(items))
+	}
+	item0, _ := items[0].(map[string]any)
+	if item0["id"] != "u1" || item0["name"] != "Alice" {
+		t.Errorf("body.items[0]: got %+v, want {id:u1, name:Alice}", item0)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("rows: got %d, want 1", len(rows))
+	}
+	if rows[0]["id"] != "u1" || rows[0]["name"] != "Alice" {
+		t.Errorf("rows[0]: got %+v, want {id:u1, name:Alice}", rows[0])
+	}
+}
+
+// TestUpdate_propagates_http_error surfaces non-2xx from the action
+// endpoint as APIError with the body preserved (truncated). Pins parity
+// with other write paths so callers can `errors.As` to inspect.
+func TestUpdate_propagates_http_error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(422)
+		_, _ = w.Write([]byte(`{"error":{"code":"VALIDATION","message":"missing pk"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	_, err := c.Data().Update(t.Context(), "lead", []map[string]any{{"name": "no-id"}})
+	if err == nil {
+		t.Fatal("Update: want error on 422")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("err type: got %T, want *APIError", err)
+	}
+	if apiErr.StatusCode != 422 {
+		t.Errorf("status: got %d, want 422", apiErr.StatusCode)
+	}
+	if !strings.Contains(apiErr.Body, "VALIDATION") {
+		t.Errorf("body not preserved: %q", apiErr.Body)
+	}
+	if apiErr.Path != "/api/actions/lead.__update" {
+		t.Errorf("path: got %q, want /api/actions/lead.__update", apiErr.Path)
+	}
+}
+
+// TestDelete_routes_through_action_api asserts DataClient.Delete POSTs to
+// /api/actions/{entity}.__delete with {"_ids": [...]} body, fixing the
+// 410-Gone live bug from the retired POST /api/data/{entity}/delete
+// route. Single-column PK values pass through verbatim.
+func TestDelete_routes_through_action_api(t *testing.T) {
+	var capturedPath string
+	var capturedMethod string
+	var capturedBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedPath = r.URL.Path
+		capturedMethod = r.Method
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","audit_operation_id":"op-del"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	pks := []map[string]any{
+		{"id": "u1"},
+		{"id": "u2"},
+	}
+	if err := c.Data().Delete(t.Context(), "lead", pks); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if capturedMethod != "POST" {
+		t.Errorf("method: got %q, want POST", capturedMethod)
+	}
+	if capturedPath != "/api/actions/lead.__delete" {
+		t.Errorf("path: got %q, want /api/actions/lead.__delete", capturedPath)
+	}
+	ids, ok := capturedBody["_ids"].([]any)
+	if !ok {
+		t.Fatalf("body._ids: got %T, want []any", capturedBody["_ids"])
+	}
+	if len(ids) != 2 || ids[0] != "u1" || ids[1] != "u2" {
+		t.Errorf("body._ids: got %+v, want [u1 u2]", ids)
+	}
+}
+
+// TestDelete_rejects_composite_pk_from_unordered_map prevents the silent
+// data-corruption hazard of joining randomly-ordered map values into an
+// object ID that mismatches store.SplitObjectID server-side. Callers
+// with composite PKs must pre-encode their IDs.
+func TestDelete_rejects_composite_pk_from_unordered_map(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server must not be hit when composite PK encoding rejects")
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	pks := []map[string]any{
+		{"tenant_id": "t1", "code": "c1"},
+	}
+	err := c.Data().Delete(t.Context(), "thing", pks)
+	if err == nil {
+		t.Fatal("Delete: want error on composite-PK unordered map")
+	}
+	if !strings.Contains(err.Error(), "composite primary keys") {
+		t.Errorf("error message: got %q, want mention of composite primary keys", err.Error())
+	}
+}
+
+// TestDelete_propagates_http_error surfaces non-2xx from the action
+// endpoint as APIError. Mirrors TestUpdate_propagates_http_error.
+func TestDelete_propagates_http_error(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+		_, _ = w.Write([]byte(`{"error":{"code":"FORBIDDEN","message":"no delete perm"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	err := c.Data().Delete(t.Context(), "lead", []map[string]any{{"id": "u1"}})
+	if err == nil {
+		t.Fatal("Delete: want error on 403")
+	}
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		t.Fatalf("err type: got %T, want *APIError", err)
+	}
+	if apiErr.StatusCode != 403 {
+		t.Errorf("status: got %d, want 403", apiErr.StatusCode)
+	}
+	if !strings.Contains(apiErr.Body, "FORBIDDEN") {
+		t.Errorf("body not preserved: %q", apiErr.Body)
+	}
+	if apiErr.Path != "/api/actions/lead.__delete" {
+		t.Errorf("path: got %q, want /api/actions/lead.__delete", apiErr.Path)
 	}
 }
 
