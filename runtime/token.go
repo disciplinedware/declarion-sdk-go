@@ -35,6 +35,13 @@ type HandlerClaims struct {
 	Action        string `json:"action"`
 	AuditOpID     string `json:"audit_op"`
 	Scope         string `json:"scope"`
+	// Anonymous marks tokens minted for unauthenticated handlers (webhook
+	// ingress). Such tokens carry no UserID by construction; the platform's
+	// RequestVerifier established TenantID before mint. Sidecar handlers
+	// running under Anonymous=true see empty UserID and Permissions=[];
+	// downstream gates fail closed unless a handler explicitly opts into
+	// system-anonymous semantics.
+	Anonymous bool `json:"anon,omitempty"`
 }
 
 // parseHandlerToken validates and extracts claims from a continuation token.
@@ -89,8 +96,15 @@ func parseHandlerToken(tokenString string, jwtSecret string) (*HandlerClaims, er
 	// UserID / TenantID / Action is malformed regardless of signature;
 	// without these checks a sidecar handler would receive an anonymous
 	// principal and could mistake it for a legitimately empty caller.
-	if claims.UserID == "" || claims.TenantID == "" || claims.Action == "" {
-		return nil, fmt.Errorf("handler token missing required identity claim (uid/tid/action)")
+	//
+	// Anonymous=true tokens (webhook ingress) carry no UserID by design —
+	// the verifier established the principal via tenant-only authority.
+	// TenantID and Action stay mandatory.
+	if !claims.Anonymous && claims.UserID == "" {
+		return nil, fmt.Errorf("handler token missing required identity claim (uid)")
+	}
+	if claims.TenantID == "" || claims.Action == "" {
+		return nil, fmt.Errorf("handler token missing required identity claim (tid/action)")
 	}
 
 	return claims, nil
