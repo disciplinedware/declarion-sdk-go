@@ -95,6 +95,37 @@ func writeHandlerYAML(out io.Writer, h HandlerRegistration) error {
 		lines = append(lines, "    async: true")
 	}
 
+	// Webhook-action flags.
+	if m.IsUnauthenticated {
+		lines = append(lines, "    unauthenticated: true")
+	}
+	if m.HasRawBodyAccess {
+		lines = append(lines, "    raw_body_access: true")
+	}
+	if m.MaxBodyBytes > 0 {
+		lines = append(lines, fmt.Sprintf("    max_body_bytes: %d", m.MaxBodyBytes))
+	}
+	if m.RequestDedupKey != nil {
+		lines = append(lines, "    request_dedup_key:")
+		lines = append(lines, fmt.Sprintf("      source: %s", m.RequestDedupKey.Source))
+		if m.RequestDedupKey.ParamName != "" {
+			lines = append(lines, fmt.Sprintf("      param_name: %s", m.RequestDedupKey.ParamName))
+		}
+		if m.RequestDedupKey.Expression != "" {
+			lines = append(lines, fmt.Sprintf("      expression: %q", m.RequestDedupKey.Expression))
+		}
+		if m.RequestDedupKey.RequiredForMutating {
+			lines = append(lines, "      required_for_mutating: true")
+		}
+	}
+	if m.TenantFrom != nil {
+		lines = append(lines, "    tenant_from:")
+		lines = append(lines, fmt.Sprintf("      source: %s", m.TenantFrom.Source))
+		if m.TenantFrom.HeaderName != "" {
+			lines = append(lines, fmt.Sprintf("      header_name: %s", m.TenantFrom.HeaderName))
+		}
+	}
+
 	// Retry block.
 	if m.Retry != nil {
 		lines = append(lines,

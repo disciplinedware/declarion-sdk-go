@@ -56,4 +56,13 @@ type Ctx struct {
 
 	// Baggage is the W3C baggage header value propagated from the platform.
 	Baggage string
+
+	// RawBody carries the exact bytes of the HTTP request body, captured
+	// before JSON unmarshalling, when the handler was registered with
+	// runtime.RawBodyAccess(). Empty for handlers that did not opt in.
+	//
+	// Use for HMAC / signature verification of webhook payloads where the
+	// hash must be computed over the wire bytes (any normalization through
+	// JSON round-trip would corrupt the hash).
+	RawBody []byte
 }

@@ -109,3 +109,93 @@ func TestHandler_no_options_leaves_zero_metadata(t *testing.T) {
 	assert.Nil(t, reg.Metadata.Retry)
 	assert.False(t, reg.Metadata.IsAsync)
 }
+
+// ---------------------------------------------------------------------------
+// Webhook-flag option setters
+// ---------------------------------------------------------------------------
+
+func TestUnauthenticated_sets_metadata(t *testing.T) {
+	reg := Handler("test.uwh", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, Unauthenticated())
+	assert.True(t, reg.Metadata.IsUnauthenticated)
+}
+
+func TestRawBodyAccess_sets_metadata(t *testing.T) {
+	reg := Handler("test.raw", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, RawBodyAccess())
+	assert.True(t, reg.Metadata.HasRawBodyAccess)
+}
+
+func TestMaxBodyBytes_table(t *testing.T) {
+	cases := []struct {
+		name  string
+		bytes int64
+	}{
+		{"one_kb", 1 << 10},
+		{"one_mb", 1 << 20},
+		{"sixteen_mb", 16 << 20},
+		{"zero_means_default", 0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			reg := Handler("test.cap", func(_ *Ctx, p echoParams) (echoResult, error) {
+				return echoResult{}, nil
+			}, MaxBodyBytes(tc.bytes))
+			assert.Equal(t, tc.bytes, reg.Metadata.MaxBodyBytes)
+		})
+	}
+}
+
+func TestMaxBodyBytes_panics_on_negative(t *testing.T) {
+	assert.Panics(t, func() { MaxBodyBytes(-1) })
+}
+
+func TestRequestDedupKeyExpr_sets_metadata(t *testing.T) {
+	reg := Handler("test.dedup", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, RequestDedupKeyExpr("$payload.update_id"))
+	require.NotNil(t, reg.Metadata.RequestDedupKey)
+	assert.Equal(t, "expr", reg.Metadata.RequestDedupKey.Source)
+	assert.Equal(t, "$payload.update_id", reg.Metadata.RequestDedupKey.Expression)
+}
+
+func TestRequestDedupKeyExpr_panics_on_empty(t *testing.T) {
+	assert.Panics(t, func() { RequestDedupKeyExpr("") })
+}
+
+func TestRequestDedupKeyParam_sets_metadata(t *testing.T) {
+	reg := Handler("test.dedup", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, RequestDedupKeyParam("idempotency_key"))
+	require.NotNil(t, reg.Metadata.RequestDedupKey)
+	assert.Equal(t, "param", reg.Metadata.RequestDedupKey.Source)
+	assert.Equal(t, "idempotency_key", reg.Metadata.RequestDedupKey.ParamName)
+}
+
+func TestRequestDedupKeyParam_panics_on_empty(t *testing.T) {
+	assert.Panics(t, func() { RequestDedupKeyParam("") })
+}
+
+func TestTenantFromHeader_sets_metadata(t *testing.T) {
+	reg := Handler("test.tf", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, TenantFromHeader("X-Tenant-Code"))
+	require.NotNil(t, reg.Metadata.TenantFrom)
+	assert.Equal(t, "header", reg.Metadata.TenantFrom.Source)
+	assert.Equal(t, "X-Tenant-Code", reg.Metadata.TenantFrom.HeaderName)
+}
+
+func TestTenantFromHeader_panics_on_empty(t *testing.T) {
+	assert.Panics(t, func() { TenantFromHeader("") })
+}
+
+func TestTenantFromPayloadLookup_sets_metadata(t *testing.T) {
+	reg := Handler("test.tf", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, TenantFromPayloadLookup())
+	require.NotNil(t, reg.Metadata.TenantFrom)
+	assert.Equal(t, "payload_lookup", reg.Metadata.TenantFrom.Source)
+}

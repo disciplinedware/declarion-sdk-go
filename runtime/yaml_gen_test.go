@@ -187,3 +187,113 @@ func TestFormatDuration(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Webhook-flag emission
+// ---------------------------------------------------------------------------
+
+// TestGenerateHandlersYAML_unauthenticated covers the simple bool flag.
+func TestGenerateHandlersYAML_unauthenticated(t *testing.T) {
+	setupYAMLGenTest(t)
+
+	RegisterHandler(Handler("sw.webhook.stripe", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, Unauthenticated()))
+
+	var buf bytes.Buffer
+	require.NoError(t, GenerateHandlersYAML(&buf))
+
+	out := buf.String()
+	assert.Contains(t, out, "unauthenticated: true")
+
+	var parsed struct {
+		Handlers map[string]map[string]any `yaml:"handlers"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed))
+	assert.Equal(t, true, parsed.Handlers["sw.webhook.stripe"]["unauthenticated"])
+}
+
+// TestGenerateHandlersYAML_webhook_full exercises the full webhook flag set
+// the way a real Telegram-style action would declare itself.
+func TestGenerateHandlersYAML_webhook_full(t *testing.T) {
+	setupYAMLGenTest(t)
+
+	RegisterHandler(Handler("community.webhook.telegram", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	},
+		Unauthenticated(),
+		RawBodyAccess(),
+		MaxBodyBytes(1<<20),
+		RequestDedupKeyExpr("$payload.update_id"),
+		TenantFromPayloadLookup(),
+	))
+
+	var buf bytes.Buffer
+	require.NoError(t, GenerateHandlersYAML(&buf))
+
+	out := buf.String()
+
+	var parsed struct {
+		Handlers map[string]map[string]any `yaml:"handlers"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed))
+
+	entry := parsed.Handlers["community.webhook.telegram"]
+	require.NotNil(t, entry, "handler must be present")
+	assert.Equal(t, true, entry["unauthenticated"])
+	assert.Equal(t, true, entry["raw_body_access"])
+	assert.Equal(t, 1<<20, entry["max_body_bytes"])
+
+	dedup, ok := entry["request_dedup_key"].(map[string]any)
+	require.True(t, ok, "request_dedup_key should be a map")
+	assert.Equal(t, "expr", dedup["source"])
+	assert.Equal(t, "$payload.update_id", dedup["expression"])
+
+	tenantFrom, ok := entry["tenant_from"].(map[string]any)
+	require.True(t, ok, "tenant_from should be a map")
+	assert.Equal(t, "payload_lookup", tenantFrom["source"])
+}
+
+// TestGenerateHandlersYAML_dedup_param covers the param-source variant.
+func TestGenerateHandlersYAML_dedup_param(t *testing.T) {
+	setupYAMLGenTest(t)
+
+	RegisterHandler(Handler("foo.bar", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, RequestDedupKeyParam("idempotency_key")))
+
+	var buf bytes.Buffer
+	require.NoError(t, GenerateHandlersYAML(&buf))
+
+	var parsed struct {
+		Handlers map[string]map[string]any `yaml:"handlers"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(buf.Bytes()), &parsed))
+
+	dedup, ok := parsed.Handlers["foo.bar"]["request_dedup_key"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "param", dedup["source"])
+	assert.Equal(t, "idempotency_key", dedup["param_name"])
+}
+
+// TestGenerateHandlersYAML_tenant_from_header covers the header variant.
+func TestGenerateHandlersYAML_tenant_from_header(t *testing.T) {
+	setupYAMLGenTest(t)
+
+	RegisterHandler(Handler("foo.bar", func(_ *Ctx, p echoParams) (echoResult, error) {
+		return echoResult{}, nil
+	}, TenantFromHeader("X-Tenant-Code")))
+
+	var buf bytes.Buffer
+	require.NoError(t, GenerateHandlersYAML(&buf))
+
+	var parsed struct {
+		Handlers map[string]map[string]any `yaml:"handlers"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(buf.Bytes()), &parsed))
+
+	tf, ok := parsed.Handlers["foo.bar"]["tenant_from"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "header", tf["source"])
+	assert.Equal(t, "X-Tenant-Code", tf["header_name"])
+}
