@@ -6,6 +6,22 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.11.0] - 2026-06-01
+
+### Removed
+
+- **BREAKING.** `runtime.Schedulable()` option (added in v0.10.1) is
+  DELETED along with `HandlerMetadata.Schedulable` field. The
+  declarion-core gate that consulted this flag has been removed; any
+  action whose handler resolves is now schedulable. Consumers who
+  added `sdk.Schedulable()` to handler registrations MUST remove the
+  call — it no longer compiles.
+
+### Notes
+
+v0.10.1 had a ~1-hour lifespan; no production consumers shipped against
+it. v0.11.0 supersedes.
+
 ## [v0.10.1] - 2026-06-01
 
 ### Added

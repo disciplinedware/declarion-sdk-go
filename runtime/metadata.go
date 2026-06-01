@@ -37,15 +37,6 @@ type HandlerMetadata struct {
 	// SuppressEvents disables the implicit event emission on success.
 	SuppressEvents bool
 
-	// Schedulable opts the handler into dispatch from declarion.schedules
-	// (and from any future declarion-internal periodic-job source). Without
-	// this flag set, the scheduler dispatcher refuses to enqueue the
-	// handler — a defense-in-depth gate against operators (or attackers
-	// with ABAC write to schedules) scheduling arbitrary handlers,
-	// including ones whose params shape isn't safe to reconstruct from a
-	// serialized JobPayload. Emitted as `schedulable: true`.
-	Schedulable bool
-
 	// Audit (when non-nil) overrides the action-default audit setting for
 	// this handler. true → always audit; false → never audit.
 	Audit *bool

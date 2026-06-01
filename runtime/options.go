@@ -10,8 +10,7 @@ import (
 // (dispatch) or actionMeta (UI/action wrapper):
 //
 //	A. Handler dispatch:     Timeout, Async, Retry, Idempotent, Invoke,
-//	                         AllowNoObjects, ReadOnly, SuppressEvents, Audit,
-//	                         Schedulable
+//	                         AllowNoObjects, ReadOnly, SuppressEvents, Audit
 //	B. Handler auth/security: Unauthenticated, RawBodyAccess, MaxBodyBytes,
 //	                          RequestVerifier, RequestDedupKeyExpr,
 //	                          RequestDedupKeyParam, TenantFromHeader,
@@ -125,15 +124,6 @@ func ReadOnly() Option {
 // Emitted as `suppress_events: true`.
 func SuppressEvents() Option {
 	return optionFn(func(r *registration) { r.handlerMeta.SuppressEvents = true })
-}
-
-// Schedulable opts the handler into dispatch from declarion.schedules and
-// future periodic-job sources. The scheduler dispatcher rejects enqueue of
-// any handler lacking this flag — defense-in-depth against arbitrary
-// handlers being scheduled via direct ABAC write or out-of-band SQL.
-// Emitted as `schedulable: true`.
-func Schedulable() Option {
-	return optionFn(func(r *registration) { r.handlerMeta.Schedulable = true })
 }
 
 // Audit overrides the action-default audit setting for this handler.
