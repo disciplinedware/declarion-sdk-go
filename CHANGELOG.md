@@ -6,6 +6,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.7.0] - 2026-06-01
+
+### Changed
+
+- **BREAKING.** `runtime.Serve(cfg, handlers...)` is now `runtime.Serve(cfg)`.
+  Serve walks the package-level `handlerRegistry` populated by
+  `runtime.RegisterHandler` — same registry that `GenerateHandlersYAML` reads.
+  Single source of truth for both the runtime dispatch table and the YAML
+  manifest. Eliminates the historical split where `Serve` and the generator
+  operated on disjoint sources.
+
+### Migration
+
+Callers passing handlers as varargs MUST migrate by:
+
+1. Ensure every handler is registered via `runtime.RegisterHandler(...)` in
+   an `init()` of its handler package (project-specific wrappers like
+   swiftward's `actions.RegisterAction` typically delegate to RegisterHandler).
+2. Drop the varargs from the `Serve` call: `runtime.Serve(cfg)`.
+
+Tests that need ad-hoc handler tables can keep using `handleRPC` directly
+via a project-built mux (see runtime/testing.go); they were already
+independent of `Serve`.
+
 ## [v0.5.0] - 2026-05-23
 
 ### Changed

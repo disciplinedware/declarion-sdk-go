@@ -94,9 +94,14 @@ func (c *Config) withDefaults() {
 	}
 }
 
-// Serve starts the JSON-RPC sidecar server with the given handlers.
-// Blocks until SIGTERM/SIGINT, then gracefully shuts down.
-func Serve(cfg Config, handlers ...HandlerRegistration) error {
+// Serve starts the JSON-RPC sidecar server using every handler registered
+// via RegisterHandler. Walks the same package-level handlerRegistry that
+// GenerateHandlersYAML consumes — single source of truth for both the
+// runtime dispatch table and the YAML manifest. Callers register handlers
+// in init() of their handler packages (typically through a project-specific
+// wrapper such as swiftward's actions.RegisterAction). Blocks until
+// SIGTERM/SIGINT, then gracefully shuts down.
+func Serve(cfg Config) error {
 	cfg.withDefaults()
 
 	// Startup gates. Missing JWT secret is fatal when token verification
@@ -117,8 +122,11 @@ func Serve(cfg Config, handlers ...HandlerRegistration) error {
 		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
 	}
 
-	registry := make(map[string]HandlerRegistration, len(handlers))
-	for _, h := range handlers {
+	// Walk the package-level handlerRegistry — same registry GenerateHandlersYAML
+	// consumes. RegisterHandler is the only write path; duplicate detection
+	// already fires at the registration site, so this loop is defensive only.
+	registry := make(map[string]HandlerRegistration, len(handlerRegistry))
+	for _, h := range handlerRegistry {
 		if _, exists := registry[h.Method]; exists {
 			return fmt.Errorf("duplicate handler method: %s", h.Method)
 		}
