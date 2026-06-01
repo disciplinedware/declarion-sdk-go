@@ -77,9 +77,10 @@ type HandlerMetadata struct {
 // by GenerateFunctionsYAML when emitting the actions: block.
 //
 // A registration with nil ActionMetadata emits no action: entry (handler-only,
-// e.g. swiftward UDFs). Group-C options (NameEN, NameRU, Icon, Destructive,
-// LongRunning, ProgressScreen) and group-D Action() / RequiredPermission()
-// initialize this struct.
+// e.g. pure-compute UDFs that do not need a permission gate or UI exposure).
+// Group-C options (NameEN, NameRU, Icon, Destructive, LongRunning,
+// ProgressScreen) and group-D Action() / RequiredPermission() initialize
+// this struct.
 type ActionMetadata struct {
 	// Handler is always equal to registration.method; the emitter fills it.
 	Handler string

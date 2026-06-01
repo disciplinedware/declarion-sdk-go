@@ -39,7 +39,8 @@ Every call site of the old API requires manual migration:
 1. Replace `RegisterHandler(Handler[P, R](method, fn, opts...))` with
    `RegisterFunction[P, R](method, fn, opts...)`.
 2. If the function is meant as a pure handler with no action wrapper
-   (e.g. swiftward UDFs), add `NoAction()` to the opts.
+   (a pure-compute UDF with no permission gate or UI exposure), add
+   `NoAction()` to the opts.
 3. If the function needs an action wrapper but lacks UI metadata, add
    `Action()` explicitly.
 4. Update generator binary + YAML filename + Makefile targets from
@@ -67,8 +68,8 @@ No backward-compat aliases. v0.8.x and earlier consumers MUST migrate.
 Callers passing handlers as varargs MUST migrate by:
 
 1. Ensure every handler is registered via `runtime.RegisterHandler(...)` in
-   an `init()` of its handler package (project-specific wrappers like
-   swiftward's `actions.RegisterAction` typically delegate to RegisterHandler).
+   an `init()` of its handler package (project-specific wrappers typically
+   delegate to RegisterHandler).
 2. Drop the varargs from the `Serve` call: `runtime.Serve(cfg)`.
 
 Tests that need ad-hoc handler tables can keep using `handleRPC` directly

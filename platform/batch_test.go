@@ -133,13 +133,13 @@ func TestBatch_Upsert_omits_mode_when_blank(t *testing.T) {
 // actions composed alongside data.* ops.
 func TestBatch_BuilderCallAndCreate(t *testing.T) {
 	b := (&Client{}).NewBatch().
-		Call("swiftward.actions.http_request", map[string]any{"url": "https://example.com"}).
+		Call("myapp.actions.http_request", map[string]any{"url": "https://example.com"}).
 		Create("state_counters", map[string]any{"code": "x", "count": 1})
 
 	if len(b.ops) != 2 {
 		t.Fatalf("ops: got %d, want 2", len(b.ops))
 	}
-	if b.ops[0].Action != "swiftward.actions.http_request" {
+	if b.ops[0].Action != "myapp.actions.http_request" {
 		t.Errorf("op0 action: got %q", b.ops[0].Action)
 	}
 	if b.ops[1].Action != "state_counters.__create" {
@@ -188,7 +188,7 @@ func TestBatch_ExecuteRoundtrip(t *testing.T) {
 
 	c := New(Config{BaseURL: srv.URL})
 	resp, err := c.NewBatch().
-		Call("swiftward.actions.http_request", map[string]any{"url": "https://example.com"}).
+		Call("myapp.actions.http_request", map[string]any{"url": "https://example.com"}).
 		Execute(t.Context())
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

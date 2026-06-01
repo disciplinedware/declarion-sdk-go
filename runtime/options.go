@@ -48,10 +48,13 @@ var validBackoffs = map[string]bool{
 }
 
 // validInvokes is the closed set of accepted invoke modes for handler dispatch.
+// MUST stay in sync with declarion-core's engine schema (validInvokeModes in
+// internal/engine/types_handler_consts.go) — a mismatch lets the SDK accept a
+// value the core rejects at load time, or vice versa.
 var validInvokes = map[string]bool{
+	"array":   true,
 	"each":    true,
 	"unbound": true,
-	"batch":   true,
 }
 
 // --- Group A: handler dispatch ---
@@ -89,11 +92,12 @@ func Idempotent() Option {
 	return optionFn(func(r *registration) { r.handlerMeta.Idempotent = true })
 }
 
-// Invoke sets the handler invoke mode. Must be one of "each" (default),
-// "unbound", "batch". Panics on unknown value. Emitted as `invoke: <mode>`.
+// Invoke sets the handler invoke mode. Must be one of "array", "each"
+// (default), "unbound". Panics on unknown value. Emitted as `invoke: <mode>`.
+// Values mirror declarion-core's engine schema; "batch" is NOT valid.
 func Invoke(mode string) Option {
 	if !validInvokes[mode] {
-		panic(fmt.Sprintf("runtime.Invoke: mode must be one of each|unbound|batch, got %q", mode))
+		panic(fmt.Sprintf("runtime.Invoke: mode must be one of array|each|unbound, got %q", mode))
 	}
 	return optionFn(func(r *registration) { r.handlerMeta.Invoke = mode })
 }
@@ -106,7 +110,12 @@ func AllowNoObjects() Option {
 }
 
 // ReadOnly marks the handler as side-effect-free; composites and replay paths
-// may skip durability writes. Emitted as `read_only: true`.
+// may skip durability writes.
+//
+// NOTE: Currently an SDK-internal hint only. Not emitted in generated YAML
+// because declarion-core's Handler.ReadOnly carries `yaml:"-"` and ignores
+// the field on load — emitting it would create the illusion of intent
+// without effect. The option is preserved for future YAML plumbing.
 func ReadOnly() Option {
 	return optionFn(func(r *registration) { r.handlerMeta.ReadOnly = true })
 }
@@ -289,8 +298,8 @@ func Action() Option {
 // LongRunning, ProgressScreen, RequiredPermission) — that combination is a
 // programming error, not a silent drop.
 //
-// Used by swiftward UDFs and other handler-only functions that are pure
-// compute (no permission gate, no UI exposure).
+// Used by pure-compute handler-only functions (UDFs) that have no permission
+// gate and no UI exposure.
 func NoAction() Option {
 	return optionFn(func(r *registration) { r.noAction = true })
 }

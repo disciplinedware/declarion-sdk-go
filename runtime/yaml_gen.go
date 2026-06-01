@@ -96,9 +96,11 @@ func writeHandlerYAML(out io.Writer, r registration) error {
 	if m.AllowNoObjects {
 		lines = append(lines, "    allow_no_objects: true")
 	}
-	if m.ReadOnly {
-		lines = append(lines, "    read_only: true")
-	}
+	// ReadOnly is intentionally NOT emitted. declarion-core's Handler.ReadOnly
+	// is tagged `yaml:"-"` and dropped on load, so emitting `read_only: true`
+	// would silently lose intent. Option is kept on HandlerMetadata for
+	// future plumbing; once core surfaces the field via YAML, restore the
+	// emission here.
 	if m.SuppressEvents {
 		lines = append(lines, "    suppress_events: true")
 	}

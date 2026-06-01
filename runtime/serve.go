@@ -99,8 +99,8 @@ func (c *Config) withDefaults() {
 // GenerateFunctionsYAML consumes — single source of truth for both the
 // runtime dispatch table and the YAML manifest. Callers register functions
 // in init() of their handler packages (typically through a project-specific
-// wrapper such as swiftward's actions.RegisterAction). Blocks until
-// SIGTERM/SIGINT, then gracefully shuts down.
+// wrapper that delegates to RegisterFunction). Blocks until SIGTERM/SIGINT,
+// then gracefully shuts down.
 func Serve(cfg Config) error {
 	cfg.withDefaults()
 

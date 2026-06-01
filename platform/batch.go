@@ -79,7 +79,7 @@ func (b *Batch) WithTargetTenantCode(tenantCode string) *Batch {
 }
 
 // Call adds one op to the batch. action is the registered action code
-// (e.g. "lead.__update", "swiftward.actions.http_request"); params is the
+// (e.g. "lead.__update", "myapp.actions.http_request"); params is the
 // handler's params struct or a pre-built map[string]any.
 //
 // The builder marshals params via encoding/json so handler-typed param
