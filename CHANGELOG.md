@@ -6,6 +6,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.10.0] - 2026-06-01
+
+### Added
+
+- `runtime.RunGenerator()` — canonical one-liner for a derivative project's
+  `cmd/gen-functions-yaml` binary. Writes `runtime.GeneratedHeader` followed
+  by `GenerateFunctionsYAML(os.Stdout)`, exits non-zero on any error. Lets
+  per-project generator binaries shrink to a literal `func main() {
+  sdk.RunGenerator() }`.
+- `runtime.GeneratedHeader` — exported constant containing the canonical
+  "do not edit, regenerate via make gen-functions-yaml" comment block
+  prepended to generated YAML files.
+- `examples/gen-functions-yaml/main.go` — canonical template for the
+  per-project generator binary. Copy verbatim into derivative projects,
+  edit only the blank-import block.
+- `examples/Makefile.snippet` — canonical Makefile target pair
+  (`gen-functions-yaml` + `verify-functions-yaml`) with identical
+  target names, output path, and atomic-write pattern across every
+  derivative project. Copy verbatim.
+
+### Migration
+
+No breaking changes; v0.9.0 callers continue to work. Existing
+`cmd/gen-functions-yaml/main.go` binaries can optionally shrink to the
+template shape by replacing their hand-written header + GenerateFunctionsYAML
+call with `sdk.RunGenerator()`.
+
 ## [v0.9.0] - 2026-06-01
 
 ### Changed

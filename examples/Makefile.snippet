@@ -1,0 +1,41 @@
+# Canonical Makefile snippet for a derivative project's functions YAML
+# generator. Copy verbatim into your project's Makefile. The target names,
+# output path, and atomic-write pattern are identical across every
+# derivative project — DO NOT customize.
+#
+# Requires:
+#   - cmd/gen-functions-yaml/main.go (copy from
+#     declarion-sdk-go/examples/gen-functions-yaml/main.go and edit imports)
+#   - declarion/schema/ directory (the standard Declarion schema mount path)
+#
+# Wire `make verify-functions-yaml` into your CI workflow next to `go test`
+# so a drifted committed YAML fails the build.
+
+.PHONY: gen-functions-yaml verify-functions-yaml
+
+gen-functions-yaml: ## Regenerate declarion/schema/_functions.generated.yaml from the Go function init() registry
+	@DST=declarion/schema/_functions.generated.yaml; \
+	TMP=$$(mktemp); \
+	if ! (cd golang && go run ./cmd/gen-functions-yaml) > "$$TMP"; then \
+		rm -f "$$TMP"; \
+		echo "ERROR: gen-functions-yaml failed; $$DST left unchanged"; \
+		exit 1; \
+	fi; \
+	mv "$$TMP" "$$DST"; \
+	echo "regenerated $$DST"
+
+verify-functions-yaml: ## Fail if regeneration would change _functions.generated.yaml (CI drift guard)
+	@DST=declarion/schema/_functions.generated.yaml; \
+	TMP=$$(mktemp); \
+	if ! (cd golang && go run ./cmd/gen-functions-yaml) > "$$TMP"; then \
+		rm -f "$$TMP"; \
+		echo "ERROR: gen-functions-yaml failed during verify"; \
+		exit 1; \
+	fi; \
+	if ! diff -u "$$DST" "$$TMP"; then \
+		rm -f "$$TMP"; \
+		echo "ERROR: $$DST is out of date. Run 'make gen-functions-yaml' and commit."; \
+		exit 1; \
+	fi; \
+	rm -f "$$TMP"; \
+	echo "$$DST is up to date"
