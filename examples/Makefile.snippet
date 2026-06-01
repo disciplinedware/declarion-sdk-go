@@ -10,6 +10,14 @@
 #
 # Wire `make verify-functions-yaml` into your CI workflow next to `go test`
 # so a drifted committed YAML fails the build.
+#
+# Module-project deviation: a Declarion APPLICATION-MODULE project (as
+# opposed to an engine/core project) keeps its schema under
+# modules/<module-name>/schema/, not declarion/schema/. In that case,
+# adjust DST to modules/<module-name>/schema/_functions.generated.yaml.
+# Document the path choice in a comment beside the target. Everything
+# else (target names, atomic mktemp+mv, drift guard) stays byte-identical.
+# See declarion-crm for a worked example.
 
 .PHONY: gen-functions-yaml verify-functions-yaml
 

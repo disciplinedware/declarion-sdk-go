@@ -7,9 +7,12 @@
 // blank-imports every handler/action/udf subpackage).
 //
 // Wire the Makefile target via the snippet in
-// declarion-sdk-go/examples/Makefile.snippet — same target names, same
-// output path, byte-for-byte across every derivative project. Developers
-// moving between projects see ONE canonical pattern.
+// declarion-sdk-go/examples/Makefile.snippet — same target names,
+// byte-for-byte across every derivative project. Output path stays at
+// declarion/schema/_functions.generated.yaml for engine/core projects;
+// application-module projects (e.g. declarion-crm) use
+// modules/<module-name>/schema/_functions.generated.yaml instead. The
+// Makefile snippet documents this single supported deviation.
 //
 // Build identical across all derivative projects:
 //
