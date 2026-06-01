@@ -6,6 +6,51 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.9.0] - 2026-06-01
+
+### Changed
+
+- **BREAKING.** `runtime.Handler[P, R]()` builder + `runtime.RegisterHandler(h)`
+  + `runtime.GenerateHandlersYAML(out)` are REPLACED by a single primitive
+  `runtime.RegisterFunction[P, R](method, fn, opts...)` and a single
+  generator `runtime.GenerateFunctionsYAML(out)`. `runtime.HandlerOption`
+  is REPLACED by `runtime.Option`. `runtime.HandlerRegistration` is now
+  internal (`registration`).
+- Generator emits `handlers:` + `actions:` blocks in one document. UDFs
+  (registrations created with `NoAction()`) appear only in the `handlers:`
+  block. Functions with any group-C UI option (NameEN/NameRU/Icon/
+  Destructive/LongRunning/ProgressScreen) — or an explicit `Action()` —
+  also appear in `actions:`.
+- `runtime.HandleRPCForTest(w, r, cfg)` no longer takes a registry map
+  parameter; it builds the registry from the package-level handlerRegistry
+  populated by RegisterFunction.
+- Adds Option constructors covering action UI metadata (NameEN, NameRU,
+  Icon, Destructive, LongRunning, ProgressScreen, Action, NoAction,
+  RequiredPermission) and handler dispatch fields (Idempotent, Invoke,
+  AllowNoObjects, ReadOnly, SuppressEvents, Audit, RequestVerifier) on
+  top of the prior surface (Timeout, Async, Retry, Unauthenticated,
+  RawBodyAccess, MaxBodyBytes, RequestDedupKeyExpr, RequestDedupKeyParam,
+  TenantFromHeader, TenantFromPayloadLookup).
+
+### Migration
+
+Every call site of the old API requires manual migration:
+
+1. Replace `RegisterHandler(Handler[P, R](method, fn, opts...))` with
+   `RegisterFunction[P, R](method, fn, opts...)`.
+2. If the function is meant as a pure handler with no action wrapper
+   (e.g. swiftward UDFs), add `NoAction()` to the opts.
+3. If the function needs an action wrapper but lacks UI metadata, add
+   `Action()` explicitly.
+4. Update generator binary + YAML filename + Makefile targets from
+   `GenerateHandlersYAML` / `actions.generated.yaml` / `gen-handlers-yaml`
+   to `GenerateFunctionsYAML` / `_functions.generated.yaml` /
+   `gen-functions-yaml` (and `verify-functions-yaml`).
+5. Update `runtime.HandleRPCForTest` call sites to drop the registry-map
+   parameter; register handlers via RegisterFunction before invocation.
+
+No backward-compat aliases. v0.8.x and earlier consumers MUST migrate.
+
 ## [v0.7.0] - 2026-06-01
 
 ### Changed

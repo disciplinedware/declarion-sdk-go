@@ -6,15 +6,15 @@ import (
 	"github.com/disciplinedware/declarion-sdk-go/runtime"
 )
 
-// ConformanceSidecarHandlers returns the handler registrations for the conformance
-// test sidecar. Language-agnostic: any SDK that implements these three handlers
-// can pass the conformance suite.
-func ConformanceSidecarHandlers() []runtime.HandlerRegistration {
-	return []runtime.HandlerRegistration{
-		runtime.Handler("conformance.echo", handleEcho),
-		runtime.Handler("conformance.error", handleError),
-		runtime.Handler("conformance.callback", handleCallback),
-	}
+// RegisterConformanceSidecarHandlers registers the three handlers the
+// conformance suite expects on the package-level handler registry. Tests
+// call ClearHandlerRegistry first to isolate from any neighbouring registry
+// state. Language-agnostic in spirit: any SDK that implements the three
+// handlers below can pass the conformance suite.
+func RegisterConformanceSidecarHandlers() {
+	runtime.RegisterFunction[echoParams, echoResult]("conformance.echo", handleEcho)
+	runtime.RegisterFunction[errorParams, any]("conformance.error", handleError)
+	runtime.RegisterFunction[callbackParams, callbackResult]("conformance.callback", handleCallback)
 }
 
 // --- Handler implementations ---

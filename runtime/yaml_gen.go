@@ -8,41 +8,24 @@ import (
 	"time"
 )
 
-// handlerRegistry is the process-wide registry populated by RegisterHandler.
-// It is keyed by method name and used by GenerateHandlersYAML.
-var handlerRegistry []HandlerRegistration
-
-// RegisterHandler adds a HandlerRegistration to the process-wide registry so
-// that GenerateHandlersYAML can discover it. Call from init() in each package
-// that defines handlers. Panics on duplicate method names.
+// GenerateFunctionsYAML walks the process-wide handler registry (populated by
+// RegisterFunction calls from init() functions) and emits a YAML document
+// compatible with declarion-core's loader.
 //
-// Consumers that drive generation via cmd/gen-handlers-yaml import their handler
-// packages as side-effects (blank imports), which triggers init() calls that call
-// RegisterHandler. The generator then calls GenerateHandlersYAML.
-func RegisterHandler(h HandlerRegistration) {
-	for _, existing := range handlerRegistry {
-		if existing.Method == h.Method {
-			panic(fmt.Sprintf("runtime.RegisterHandler: duplicate method %q", h.Method))
-		}
-	}
-	handlerRegistry = append(handlerRegistry, h)
-}
-
-// ClearHandlerRegistry removes all registered handlers. Intended for test
-// isolation only; production code never calls this.
-func ClearHandlerRegistry() {
-	handlerRegistry = nil
-}
-
-// GenerateHandlersYAML walks the process-wide handler registry (populated by
-// RegisterHandler calls from init() functions) and emits a YAML document
-// compatible with declarion-core's handler schema loader.
+// The output contains two blocks:
 //
-// The output is a "handlers:" block with one entry per registered handler.
-// Entries are sorted alphabetically by method name so the output is stable
-// across runs (required for deterministic git diffs and CI verify-generated checks).
+//   - handlers:  one entry per registration (always).
+//   - actions:   one entry per registration whose actionMeta is non-nil.
+//
+// Entries within each block are sorted alphabetically by method name so the
+// output is stable across runs (required for deterministic git diffs and CI
+// verify-generated checks).
+//
+// UDFs (registrations created with NoAction()) appear only under handlers:.
+// Pure-compute handlers without UI exposure do not produce action entries.
 //
 // Type-mapping for params/result fields:
+//
 //   - string       -> type: string
 //   - []string     -> type: array<string>
 //   - int, int64   -> type: int
@@ -50,25 +33,37 @@ func ClearHandlerRegistry() {
 //   - bool         -> type: boolean
 //   - time.Time    -> type: timestamp
 //   - map[string]any, any -> type: json
-//
-// For consumers that use per-handler metadata (Timeout, NameEN/RU, Retry, Async)
-// the corresponding YAML fields are emitted when present.
-func GenerateHandlersYAML(out io.Writer) error {
-	// Sort for stable output.
-	sorted := make([]HandlerRegistration, len(handlerRegistry))
+func GenerateFunctionsYAML(out io.Writer) error {
+	registryMu.RLock()
+	sorted := make([]registration, len(handlerRegistry))
 	copy(sorted, handlerRegistry)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Method < sorted[j].Method
-	})
+	registryMu.RUnlock()
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].method < sorted[j].method })
 
-	_, err := fmt.Fprintln(out, "handlers:")
-	if err != nil {
+	if _, err := fmt.Fprintln(out, "handlers:"); err != nil {
 		return fmt.Errorf("write handlers header: %w", err)
 	}
+	for _, r := range sorted {
+		if err := writeHandlerYAML(out, r); err != nil {
+			return fmt.Errorf("write handler %s: %w", r.method, err)
+		}
+	}
 
-	for _, h := range sorted {
-		if err := writeHandlerYAML(out, h); err != nil {
-			return fmt.Errorf("write handler %s: %w", h.Method, err)
+	// actions: block — only registrations with actionMeta != nil.
+	var withAction []registration
+	for _, r := range sorted {
+		if r.actionMeta != nil {
+			withAction = append(withAction, r)
+		}
+	}
+	if len(withAction) > 0 {
+		if _, err := fmt.Fprintln(out, "actions:"); err != nil {
+			return fmt.Errorf("write actions header: %w", err)
+		}
+		for _, r := range withAction {
+			if err := writeActionYAML(out, r); err != nil {
+				return fmt.Errorf("write action %s: %w", r.method, err)
+			}
 		}
 	}
 
@@ -76,26 +71,42 @@ func GenerateHandlersYAML(out io.Writer) error {
 }
 
 // writeHandlerYAML emits one handler entry in YAML. Indentation is two spaces.
-func writeHandlerYAML(out io.Writer, h HandlerRegistration) error {
-	m := h.Metadata
+func writeHandlerYAML(out io.Writer, r registration) error {
+	m := r.handlerMeta
 
 	lines := []string{
-		fmt.Sprintf("  %s:", h.Method),
+		fmt.Sprintf("  %s:", r.method),
 		"    type: jsonrpc",
 		"    url: ${param.handlers_url}/rpc",
 	}
 
-	// Timeout: emit formatted duration.
+	// Group A — dispatch fields.
 	if m.Timeout != nil {
 		lines = append(lines, fmt.Sprintf("    timeout: %s", formatDuration(*m.Timeout)))
 	}
-
-	// Async.
 	if m.IsAsync {
 		lines = append(lines, "    async: true")
 	}
+	if m.Idempotent {
+		lines = append(lines, "    idempotent: true")
+	}
+	if m.Invoke != "" {
+		lines = append(lines, fmt.Sprintf("    invoke: %s", m.Invoke))
+	}
+	if m.AllowNoObjects {
+		lines = append(lines, "    allow_no_objects: true")
+	}
+	if m.ReadOnly {
+		lines = append(lines, "    read_only: true")
+	}
+	if m.SuppressEvents {
+		lines = append(lines, "    suppress_events: true")
+	}
+	if m.Audit != nil {
+		lines = append(lines, fmt.Sprintf("    audit: %t", *m.Audit))
+	}
 
-	// Webhook-action flags.
+	// Group B — webhook flags.
 	if m.IsUnauthenticated {
 		lines = append(lines, "    unauthenticated: true")
 	}
@@ -104,6 +115,9 @@ func writeHandlerYAML(out io.Writer, h HandlerRegistration) error {
 	}
 	if m.MaxBodyBytes > 0 {
 		lines = append(lines, fmt.Sprintf("    max_body_bytes: %d", m.MaxBodyBytes))
+	}
+	if m.RequestVerifier != "" {
+		lines = append(lines, fmt.Sprintf("    request_verifier: %s", m.RequestVerifier))
 	}
 	if m.RequestDedupKey != nil {
 		lines = append(lines, "    request_dedup_key:")
@@ -135,15 +149,16 @@ func writeHandlerYAML(out io.Writer, h HandlerRegistration) error {
 		)
 	}
 
-	// Display name block.
-	if m.NameEN != "" || m.NameRU != "" {
-		lines = append(lines, "    display:")
-		if m.NameEN != "" && m.NameRU != "" {
-			lines = append(lines, fmt.Sprintf("      name: {en: %q, ru: %q}", m.NameEN, m.NameRU))
-		} else if m.NameEN != "" {
-			lines = append(lines, fmt.Sprintf("      name: {en: %q}", m.NameEN))
-		} else {
-			lines = append(lines, fmt.Sprintf("      name: {ru: %q}", m.NameRU))
+	// Display name block — single source of truth lives on actionMeta. The
+	// emitter mirrors it into the handler block when present so declarion's
+	// handler-level display.name is populated for non-action consumers
+	// (audit log entries, scheduler labels, etc.) without duplicating the
+	// registration call.
+	if r.actionMeta != nil {
+		en, ru := r.actionMeta.Display.NameEN, r.actionMeta.Display.NameRU
+		if en != "" || ru != "" {
+			lines = append(lines, "    display:")
+			lines = append(lines, formatDisplayName(en, ru))
 		}
 	}
 
@@ -155,9 +170,62 @@ func writeHandlerYAML(out io.Writer, h HandlerRegistration) error {
 	return nil
 }
 
+// writeActionYAML emits one action entry in YAML. Indentation is two spaces.
+func writeActionYAML(out io.Writer, r registration) error {
+	a := r.actionMeta
+
+	lines := []string{
+		fmt.Sprintf("  %s:", r.method),
+		fmt.Sprintf("    handler: %s", r.method),
+	}
+
+	if a.Display.NameEN != "" || a.Display.NameRU != "" || a.Display.Icon != "" {
+		lines = append(lines, "    display:")
+		if a.Display.NameEN != "" || a.Display.NameRU != "" {
+			lines = append(lines, formatDisplayName(a.Display.NameEN, a.Display.NameRU))
+		}
+		if a.Display.Icon != "" {
+			lines = append(lines, fmt.Sprintf("      icon: %s", a.Display.Icon))
+		}
+	}
+	if a.Destructive {
+		lines = append(lines, "    destructive: true")
+	}
+	if a.LongRunning {
+		lines = append(lines, "    long_running: true")
+	}
+	if a.ProgressScreen != "" {
+		lines = append(lines, fmt.Sprintf("    progress_screen: %s", a.ProgressScreen))
+	}
+	if a.RequiredPermission != "" {
+		lines = append(lines, fmt.Sprintf("    required_permission: %s", a.RequiredPermission))
+	}
+
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// formatDisplayName builds a single-line "name: {en: ..., ru: ...}" entry
+// nested under a display: block (six-space indentation).
+func formatDisplayName(en, ru string) string {
+	switch {
+	case en != "" && ru != "":
+		return fmt.Sprintf("      name: {en: %q, ru: %q}", en, ru)
+	case en != "":
+		return fmt.Sprintf("      name: {en: %q}", en)
+	default:
+		return fmt.Sprintf("      name: {ru: %q}", ru)
+	}
+}
+
 // formatDuration converts a time.Duration to a human-readable string that
 // declarion's YAML loader understands: "5s", "30s", "1m", "1m30s", "2h".
-// Sub-second precision is not supported by the loader; values are truncated to seconds.
+// Sub-second precision is not supported by the loader; values are truncated
+// to seconds.
 func formatDuration(d time.Duration) string {
 	d = d.Truncate(time.Second)
 	if d == 0 {

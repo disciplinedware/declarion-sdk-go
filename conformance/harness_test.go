@@ -13,12 +13,12 @@ import (
 )
 
 func TestGoSDKPassesConformanceSuite(t *testing.T) {
-	// Build the conformance sidecar's handler registry.
-	handlers := ConformanceSidecarHandlers()
-	registry := make(map[string]runtime.HandlerRegistration, len(handlers))
-	for _, h := range handlers {
-		registry[h.Method] = h
-	}
+	// Populate the package-level handler registry with the three
+	// conformance handlers. Clear first to isolate from any leftover
+	// state from a neighbouring test in the same process.
+	runtime.ClearHandlerRegistry()
+	t.Cleanup(runtime.ClearHandlerRegistry)
+	RegisterConformanceSidecarHandlers()
 
 	// Start the sidecar in-process using httptest.
 	cfg := &runtime.Config{}
@@ -27,7 +27,7 @@ func TestGoSDKPassesConformanceSuite(t *testing.T) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
-		runtime.HandleRPCForTest(w, r, registry, cfg)
+		runtime.HandleRPCForTest(w, r, cfg)
 	})
 	sidecar := httptest.NewServer(mux)
 	defer sidecar.Close()

@@ -94,10 +94,10 @@ func (c *Config) withDefaults() {
 	}
 }
 
-// Serve starts the JSON-RPC sidecar server using every handler registered
-// via RegisterHandler. Walks the same package-level handlerRegistry that
-// GenerateHandlersYAML consumes — single source of truth for both the
-// runtime dispatch table and the YAML manifest. Callers register handlers
+// Serve starts the JSON-RPC sidecar server using every function registered
+// via RegisterFunction. Walks the same package-level handlerRegistry that
+// GenerateFunctionsYAML consumes — single source of truth for both the
+// runtime dispatch table and the YAML manifest. Callers register functions
 // in init() of their handler packages (typically through a project-specific
 // wrapper such as swiftward's actions.RegisterAction). Blocks until
 // SIGTERM/SIGINT, then gracefully shuts down.
@@ -122,16 +122,20 @@ func Serve(cfg Config) error {
 		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
 	}
 
-	// Walk the package-level handlerRegistry — same registry GenerateHandlersYAML
-	// consumes. RegisterHandler is the only write path; duplicate detection
-	// already fires at the registration site, so this loop is defensive only.
-	registry := make(map[string]HandlerRegistration, len(handlerRegistry))
-	for _, h := range handlerRegistry {
-		if _, exists := registry[h.Method]; exists {
-			return fmt.Errorf("duplicate handler method: %s", h.Method)
+	// Walk the package-level handlerRegistry — same registry that
+	// GenerateFunctionsYAML consumes. RegisterFunction is the only write
+	// path; duplicate detection already fires at the registration site, so
+	// this loop is defensive only.
+	registryMu.RLock()
+	registry := make(map[string]registration, len(handlerRegistry))
+	for _, r := range handlerRegistry {
+		if _, exists := registry[r.method]; exists {
+			registryMu.RUnlock()
+			return fmt.Errorf("duplicate handler method: %s", r.method)
 		}
-		registry[h.Method] = h
+		registry[r.method] = r
 	}
+	registryMu.RUnlock()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
@@ -191,7 +195,7 @@ func Serve(cfg Config) error {
 	return nil
 }
 
-func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]HandlerRegistration, cfg *Config) {
+func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]registration, cfg *Config) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Read and parse the request body FIRST so we have req.ID for error responses.
@@ -233,7 +237,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 	}
 
 	// Find handler.
-	handler, ok := registry[req.Method]
+	reg, ok := registry[req.Method]
 	if !ok {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCMethodNotFound,
 			fmt.Sprintf("method %q not found", req.Method), "", false))
@@ -320,7 +324,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]Handl
 	}
 
 	// Dispatch with params stripped of reserved keys.
-	result, err := handler.Dispatch(hctx, paramsWithoutReserved)
+	result, err := reg.dispatch(hctx, paramsWithoutReserved)
 	if err != nil {
 		var appErr *AppError
 		if errors.As(err, &appErr) {

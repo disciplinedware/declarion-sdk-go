@@ -40,30 +40,32 @@ func mintTestToken(t *testing.T, tenantID, userID, action, auditOp string) strin
 	return signed
 }
 
-func setupTestServer(t *testing.T, handlers ...HandlerRegistration) *httptest.Server {
+// setupTestServer prepares an in-process JSON-RPC server backed by the
+// package-level handler registry. Tests register their handlers via
+// RegisterFunction BEFORE calling this. ClearHandlerRegistry runs on
+// cleanup so neighbouring tests stay isolated.
+func setupTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	registry := make(map[string]HandlerRegistration, len(handlers))
-	for _, h := range handlers {
-		registry[h.Method] = h
-	}
-	cfg := &Config{
-		JWTSecret: testSecret,
-	}
+	cfg := &Config{JWTSecret: testSecret}
 	cfg.withDefaults()
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
-		handleRPC(w, r, registry, cfg)
-	})
-	return httptest.NewServer(mux)
+	return startInProcessServer(t, cfg)
 }
 
-func setupTestServerWithConfig(t *testing.T, cfg *Config, handlers ...HandlerRegistration) *httptest.Server {
+func setupTestServerWithConfig(t *testing.T, cfg *Config) *httptest.Server {
 	t.Helper()
-	registry := make(map[string]HandlerRegistration, len(handlers))
-	for _, h := range handlers {
-		registry[h.Method] = h
-	}
 	cfg.withDefaults()
+	return startInProcessServer(t, cfg)
+}
+
+func startInProcessServer(t *testing.T, cfg *Config) *httptest.Server {
+	t.Helper()
+	t.Cleanup(ClearHandlerRegistry)
+	registryMu.RLock()
+	registry := make(map[string]registration, len(handlerRegistry))
+	for _, reg := range handlerRegistry {
+		registry[reg.method] = reg
+	}
+	registryMu.RUnlock()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
 		handleRPC(w, r, registry, cfg)
@@ -80,9 +82,11 @@ type echoResult struct {
 }
 
 func TestHandleRPC_success(t *testing.T) {
-	srv := setupTestServer(t, Handler("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "hello " + p.Name}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServer(t)
 	defer srv.Close()
 
 	token := mintTestToken(t, "tenant-1", "user-1", "test.echo", "audit-1")
@@ -114,6 +118,7 @@ func TestHandleRPC_success(t *testing.T) {
 }
 
 func TestHandleRPC_method_not_found(t *testing.T) {
+	ClearHandlerRegistry()
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -129,6 +134,7 @@ func TestHandleRPC_method_not_found(t *testing.T) {
 }
 
 func TestHandleRPC_invalid_json(t *testing.T) {
+	ClearHandlerRegistry()
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -143,6 +149,7 @@ func TestHandleRPC_invalid_json(t *testing.T) {
 }
 
 func TestHandleRPC_protocol_version_mismatch(t *testing.T) {
+	ClearHandlerRegistry()
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -161,19 +168,20 @@ func TestHandleRPC_protocol_version_mismatch(t *testing.T) {
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
 	assert.Equal(t, CodeProtocolMismatch, rpcResp.Error.Data.DeclarionCode)
-	// After fix: req.ID should be available in error response.
 	assert.Equal(t, "req-1", rpcResp.ID)
 }
 
 func TestHandleRPC_handler_error(t *testing.T) {
-	srv := setupTestServer(t, Handler("test.fail", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.fail", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		return echoResult{}, &AppError{
 			Code:          JSONRPCAppError,
 			Message:       "ClickUp API 429",
 			DeclarionCode: CodeExternalService,
 			Retryable:     true,
 		}
-	}))
+	}, NoAction())
+	srv := setupTestServer(t)
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.fail","params":{"name":"test"}}`
@@ -194,12 +202,13 @@ func TestHandleRPC_invalid_params(t *testing.T) {
 	type strictParams struct {
 		Count int `json:"count"`
 	}
-	srv := setupTestServer(t, Handler("test.strict", func(ctx *Ctx, p strictParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[strictParams, echoResult]("test.strict", func(ctx *Ctx, p strictParams) (echoResult, error) {
 		return echoResult{Message: "ok"}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServer(t)
 	defer srv.Close()
 
-	// Send string where int expected - Go's json.Unmarshal rejects this.
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.strict","params":{"count":"not_a_number"}}`
 	resp, err := http.Post(srv.URL+"/rpc", "application/json", strings.NewReader(body))
 	require.NoError(t, err)
@@ -213,9 +222,11 @@ func TestHandleRPC_invalid_params(t *testing.T) {
 }
 
 func TestHandleRPC_invalid_token(t *testing.T) {
-	srv := setupTestServer(t, Handler("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "ok"}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServer(t)
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.echo","params":{"name":"test"}}`
@@ -237,10 +248,12 @@ func TestHandleRPC_invalid_token(t *testing.T) {
 
 func TestHandleRPC_context_propagation(t *testing.T) {
 	var capturedCtx *Ctx
-	srv := setupTestServer(t, Handler("test.ctx", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.ctx", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		capturedCtx = ctx
 		return echoResult{Message: "ok"}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServer(t)
 	defer srv.Close()
 
 	token := mintTestToken(t, "tenant-42", "user-99", "test.ctx", "audit-op-123")
@@ -268,12 +281,13 @@ func TestHandleRPC_context_propagation(t *testing.T) {
 }
 
 func TestHandleRPC_no_token_allowed(t *testing.T) {
-	// Without a token, identity fields are empty but request succeeds.
 	var capturedCtx *Ctx
-	srv := setupTestServer(t, Handler("test.open", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.open", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		capturedCtx = ctx
 		return echoResult{Message: "ok"}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServer(t)
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.open","params":{"name":"test"}}`
@@ -291,9 +305,11 @@ func TestHandleRPC_require_token_rejects_unauthenticated(t *testing.T) {
 		JWTSecret:    testSecret,
 		RequireToken: true,
 	}
-	srv := setupTestServerWithConfig(t, cfg, Handler("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "ok"}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServerWithConfig(t, cfg)
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.echo","params":{"name":"test"}}`
@@ -313,9 +329,11 @@ func TestHandleRPC_require_token_allows_authenticated(t *testing.T) {
 		JWTSecret:    testSecret,
 		RequireToken: true,
 	}
-	srv := setupTestServerWithConfig(t, cfg, Handler("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	ClearHandlerRegistry()
+	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "hello " + p.Name}, nil
-	}))
+	}, NoAction())
+	srv := setupTestServerWithConfig(t, cfg)
 	defer srv.Close()
 
 	token := mintTestToken(t, "t1", "u1", "test.echo", "op1")
@@ -337,6 +355,7 @@ func TestHandleRPC_require_token_allows_authenticated(t *testing.T) {
 }
 
 func TestHandleRPC_wrong_jsonrpc_version(t *testing.T) {
+	ClearHandlerRegistry()
 	srv := setupTestServer(t)
 	defer srv.Close()
 
