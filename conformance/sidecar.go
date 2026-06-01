@@ -68,8 +68,12 @@ func handleCallback(ctx *runtime.Ctx, p callbackParams) (callbackResult, error) 
 	}
 
 	// Use ctx.Platform directly - it auto-attaches auth, traceparent, and baggage headers.
-	records := []map[string]any{{"id": "test-1", "name": "conformance"}}
-	_, err := ctx.Platform.Data().Create(ctx.Context, "test", records)
+	// BulkCreate dispatches one __create action per call (FLAT envelope:
+	// {entity, fields}); the harness's fake platform accepts any path so
+	// the call lands as a recorded callback regardless of the legacy
+	// /api/data/{entity} -> /api/actions/{entity}.__create migration.
+	fields := map[string]any{"id": "test-1", "name": "conformance"}
+	_, err := ctx.Platform.Data().BulkCreate(ctx.Context, "test", fields)
 	if err != nil {
 		return callbackResult{}, fmt.Errorf("callback failed: %w", err)
 	}

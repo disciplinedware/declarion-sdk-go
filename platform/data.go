@@ -9,7 +9,21 @@ import (
 	"strings"
 )
 
-// DataClient wraps /api/data/{entity} endpoints.
+// DataClient wraps the platform data API surface. After the 2026-06-01
+// write-API rewrite the only legacy CRUD endpoints left are reads:
+//
+//   - GET  /api/data/{entity}            — List + query-PK Get
+//   - POST /api/data/{entity}/export     — CSV blob streaming (not in SDK yet)
+//
+// Every write (insert / upsert / update / delete / restore) dispatches
+// through the 5 platform-default actions
+// (POST /api/actions/{entity}.__{op}) with a FLAT request envelope:
+//
+//	{"object_ids": [...], "entity": "X", "fields": {...}, ...}
+//
+// See declarion-core plan 2026-06-01-write-api-final §1.2 and the source-of-
+// truth parser at server/handlers/actions_body.go::parseActionBody. The legacy
+// `_ids` key and the legacy CRUD write routes are rejected by the platform.
 type DataClient struct {
 	c *Client
 }
@@ -181,182 +195,360 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 	return &result, nil
 }
 
-// Create creates records. Accepts a slice of records.
-func (d *DataClient) Create(ctx context.Context, entity string, records []map[string]any) ([]map[string]any, error) {
-	return d.writeMany(ctx, "POST", entity, "", records)
+// ----------------------------------------------------------------------------
+// Write API — FLAT action envelope (declarion-core 2026-06-01 write-API).
+// ----------------------------------------------------------------------------
+//
+// Every write dispatches POST /api/actions/{entity}.__{op} with a flat body:
+//
+//	{
+//	  "object_ids": ["uuid-1", ...],        // omitted for __create / __upsert
+//	  "entity": "lead",
+//	  "fields": {"name": "...", ...},        // omitted for __delete / __restore
+//	  "unique_by": ["email"],                // __upsert only
+//	  "mode": "upsert",                      // __upsert only
+//	  "condition": "entity.status == 'X'",   // __update only (CAS guard)
+//	  "error_if_not_found": false            // __update only
+//	}
+//
+// `object_ids` is the only reserved top-level key. Every other top-level key
+// is parsed by parseActionBody (declarion-core
+// server/handlers/actions_body.go) directly into the handler's typed params
+// struct via JSON tags. There is NO `params:` wrapper on the wire.
+//
+// Per-row variation (N different `fields` patches in one call) is expressed
+// as N actions in one batched dispatch — see Batch.{Create,Update,Upsert,
+// Delete,Restore} in batch.go. The single-dispatch helpers below apply the
+// same `fields` patch to every object_id.
+
+// updateConfig is the resolved set of __update envelope flags collected from
+// UpdateOption functional options.
+type updateConfig struct {
+	condition       string
+	errorIfNotFound bool
 }
 
-// Update updates records by primary key. Accepts a slice of records with
-// PK fields plus the new values included in each item.
+// UpdateOption tunes one BulkUpdate call. Maps onto the __update envelope's
+// optional flags (`condition`, `error_if_not_found`).
+type UpdateOption func(*updateConfig)
+
+// WithCondition sets the optional CAS-guard predicate evaluated server-side
+// against each row's pre-update state (expr-lang/expr syntax against
+// `entity`, `event`, `now`). A row whose condition evaluates false is
+// skipped, not failed.
+func WithCondition(condition string) UpdateOption {
+	return func(c *updateConfig) { c.condition = condition }
+}
+
+// WithErrorIfNotFound makes BulkUpdate fail with NOT_FOUND when zero rows
+// match the PK + condition gate. Default behavior is silent no-op.
+func WithErrorIfNotFound(errorIfNotFound bool) UpdateOption {
+	return func(c *updateConfig) { c.errorIfNotFound = errorIfNotFound }
+}
+
+// upsertConfig is the resolved set of __upsert envelope flags collected from
+// UpsertOption functional options.
+type upsertConfig struct {
+	mode string
+}
+
+// UpsertOption tunes one BulkUpsert call. Maps onto the __upsert envelope's
+// optional `mode` flag.
+type UpsertOption func(*upsertConfig)
+
+// WithMode sets the upsert mode flag. Supported values per
+// declarion-core handler/data_handler.go: "upsert" (default),
+// "insert_if_missing", "insert", "replace". The platform validates the
+// string; an unknown mode surfaces as an APIError.
+func WithMode(mode string) UpsertOption {
+	return func(c *upsertConfig) { c.mode = mode }
+}
+
+// BulkCreateResult is the unwrapped result of a BulkCreate call. Rows is
+// the inserted row in input order. Per the __create handler contract one
+// row is inserted per dispatch; the slice exists so the SDK shape matches
+// every other Bulk* result (and forward-compatibility if the handler ever
+// accepts multiple).
+type BulkCreateResult struct {
+	Rows             []map[string]any
+	AuditOperationID string
+}
+
+// BulkUpsertResult is the unwrapped result of a BulkUpsert call. Each row
+// carries the per-row outcome from the platform `data.upsert` handler.
+type BulkUpsertResult struct {
+	Rows             []UpsertRowResult
+	AuditOperationID string
+}
+
+// UpsertRowResult is one row's outcome from a BulkUpsert call. Mirrors the
+// platform's DataUpsertRowResult shape.
+type UpsertRowResult struct {
+	// PK is the row's primary-key value (single-column PK string, or
+	// composite PK joined by U+001F per store.ObjectID).
+	PK string `json:"pk"`
+	// Action is one of "inserted", "updated", "skipped_noop".
+	Action string `json:"action"`
+	// Row is the post-upsert row state. Absent for skipped_noop.
+	Row map[string]any `json:"row,omitempty"`
+}
+
+// BulkUpdateResult is the unwrapped result of a BulkUpdate call. Rows
+// carries the post-update row state in object_ids order; nil entries mark
+// rows skipped by the condition gate. RowsMatched is the number of rows
+// that actually wrote.
+type BulkUpdateResult struct {
+	Rows             []map[string]any
+	RowsMatched      int
+	AuditOperationID string
+}
+
+// BulkDeleteResult is the unwrapped result of a BulkDelete call.
+type BulkDeleteResult struct {
+	Deleted          int
+	AuditOperationID string
+}
+
+// BulkRestoreResult is the unwrapped result of a BulkRestore call.
+type BulkRestoreResult struct {
+	Restored         int
+	AuditOperationID string
+}
+
+// BulkCreate inserts one row via POST /api/actions/{entity}.__create.
 //
-// Routes through the platform-default __update action introduced by
-// declarion-core's unified-action-toolbar migration: the legacy CRUD path
-// (PATCH /api/data/{entity}) is retired in favor of the action API so that
-// permission gating, ABAC, audit, and lifecycle events flow through a
-// single chokepoint (dispatch_update.go). The request body is the
-// data.update handler shape: {entity, items}; the response envelope is
-// {status, result: {rows, rows_matched}, audit_operation_id} and this
-// method unwraps result.rows for the caller.
-func (d *DataClient) Update(ctx context.Context, entity string, records []map[string]any) ([]map[string]any, error) {
+// The platform `data.create` handler accepts a single `fields` map per
+// dispatch (one INSERT per call). For N independent inserts use
+// Batch.Create — one __create op per row inside a single transactional
+// system.batch.
+//
+// Subresources ($properties, $statuses, $children, $params, $files) are
+// passed as `$`-prefixed keys INSIDE `fields`; the dispatcher extracts
+// them via subresource.ExtractSubResources. There is no separate
+// "subresources" envelope slot.
+func (d *DataClient) BulkCreate(ctx context.Context, entity string, fields map[string]any) (BulkCreateResult, error) {
 	if entity == "" {
-		return nil, fmt.Errorf("data update: entity is required")
+		return BulkCreateResult{}, fmt.Errorf("data create: entity is required")
+	}
+	if len(fields) == 0 {
+		return BulkCreateResult{}, fmt.Errorf("data create %s: fields must be non-empty", entity)
+	}
+	path := fmt.Sprintf("/api/actions/%s.__create", entity)
+	body := map[string]any{
+		"entity": entity,
+		"fields": fields,
+	}
+	envelope, err := d.dispatchWrite(ctx, path, body)
+	if err != nil {
+		return BulkCreateResult{}, err
+	}
+	var result struct {
+		Rows []map[string]any `json:"rows"`
+	}
+	if err := decodeActionResult(envelope.Result, &result); err != nil {
+		return BulkCreateResult{}, fmt.Errorf("decode create result: %w", err)
+	}
+	return BulkCreateResult{Rows: result.Rows, AuditOperationID: envelope.AuditOperationID}, nil
+}
+
+// BulkUpsert applies one `fields` patch via POST /api/actions/{entity}.__upsert.
+//
+// The platform `data.upsert` handler matches an existing row by `uniqueBy`
+// columns: when present, the row is updated; when absent, a new row is
+// inserted (subject to `mode`). `uniqueBy` is required by the handler.
+//
+// For N rows with DIFFERENT field maps, use Batch.Upsert — one __upsert op
+// per row inside a single transactional system.batch.
+func (d *DataClient) BulkUpsert(ctx context.Context, entity string, fields map[string]any, uniqueBy []string, opts ...UpsertOption) (BulkUpsertResult, error) {
+	if entity == "" {
+		return BulkUpsertResult{}, fmt.Errorf("data upsert: entity is required")
+	}
+	if len(fields) == 0 {
+		return BulkUpsertResult{}, fmt.Errorf("data upsert %s: fields must be non-empty", entity)
+	}
+	if len(uniqueBy) == 0 {
+		return BulkUpsertResult{}, fmt.Errorf("data upsert %s: unique_by must be non-empty", entity)
+	}
+	cfg := upsertConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	path := fmt.Sprintf("/api/actions/%s.__upsert", entity)
+	body := map[string]any{
+		"entity":    entity,
+		"fields":    fields,
+		"unique_by": uniqueBy,
+	}
+	if cfg.mode != "" {
+		body["mode"] = cfg.mode
+	}
+	envelope, err := d.dispatchWrite(ctx, path, body)
+	if err != nil {
+		return BulkUpsertResult{}, err
+	}
+	var result struct {
+		Rows []UpsertRowResult `json:"rows"`
+	}
+	if err := decodeActionResult(envelope.Result, &result); err != nil {
+		return BulkUpsertResult{}, fmt.Errorf("decode upsert result: %w", err)
+	}
+	return BulkUpsertResult{Rows: result.Rows, AuditOperationID: envelope.AuditOperationID}, nil
+}
+
+// BulkUpdate applies one `fields` patch to every object_id via
+// POST /api/actions/{entity}.__update.
+//
+// Single-dispatch semantics: the same patch goes to every targeted row.
+// For per-row variation (N different patches), use Batch.Update — N
+// __update ops in one transactional system.batch.
+//
+// `objectIDs` must be entity primary keys; composite PKs are encoded as a
+// single string by joining the PK fields in declaration order via U+001F
+// (callers using composite PKs must pre-encode via the platform's
+// store.ObjectID convention - this SDK does not encode them here because
+// Go map iteration order would be non-deterministic).
+//
+// `condition` (WithCondition) is an optional CAS guard evaluated server-
+// side; rows failing the predicate are skipped, not erred.
+// `error_if_not_found` (WithErrorIfNotFound) flips zero-match from a
+// silent no-op to a NOT_FOUND error.
+func (d *DataClient) BulkUpdate(ctx context.Context, entity string, objectIDs []string, fields map[string]any, opts ...UpdateOption) (BulkUpdateResult, error) {
+	if entity == "" {
+		return BulkUpdateResult{}, fmt.Errorf("data update: entity is required")
+	}
+	if len(objectIDs) == 0 {
+		return BulkUpdateResult{}, fmt.Errorf("data update %s: object_ids must be non-empty", entity)
+	}
+	if len(fields) == 0 {
+		return BulkUpdateResult{}, fmt.Errorf("data update %s: fields must be non-empty", entity)
+	}
+	cfg := updateConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
 	path := fmt.Sprintf("/api/actions/%s.__update", entity)
-	reqBody := map[string]any{
-		"entity": entity,
-		"items":  records,
+	body := map[string]any{
+		"object_ids": objectIDs,
+		"entity":     entity,
+		"fields":     fields,
 	}
-	body, status, err := d.c.do(ctx, "POST", path, nil, reqBody)
+	if cfg.condition != "" {
+		body["condition"] = cfg.condition
+	}
+	if cfg.errorIfNotFound {
+		body["error_if_not_found"] = true
+	}
+	envelope, err := d.dispatchWrite(ctx, path, body)
 	if err != nil {
-		return nil, err
+		return BulkUpdateResult{}, err
 	}
-	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: truncate(string(body), 500), Path: path}
+	var result struct {
+		Rows        []map[string]any `json:"rows"`
+		RowsMatched int              `json:"rows_matched"`
 	}
-	var envelope struct {
-		Status string `json:"status"`
-		Result struct {
-			Rows        []map[string]any `json:"rows"`
-			RowsMatched int              `json:"rows_matched"`
-		} `json:"result"`
-		AuditOperationID string `json:"audit_operation_id,omitempty"`
+	if err := decodeActionResult(envelope.Result, &result); err != nil {
+		return BulkUpdateResult{}, fmt.Errorf("decode update result: %w", err)
 	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, fmt.Errorf("unmarshal update response: %w", err)
-	}
-	return envelope.Result.Rows, nil
+	return BulkUpdateResult{
+		Rows:             result.Rows,
+		RowsMatched:      result.RowsMatched,
+		AuditOperationID: envelope.AuditOperationID,
+	}, nil
 }
 
-// Delete soft-deletes records by PK objects.
+// BulkDelete soft-deletes rows by object_id via
+// POST /api/actions/{entity}.__delete.
 //
-// Routes through the platform-default __delete action; the legacy CRUD
-// path (POST /api/data/{entity}/delete) was retired and now returns 410
-// Gone. The action contract takes object IDs in the reserved `_ids`
-// control key. Composite primary keys collapse into a single opaque ID
-// using the platform Unit-Separator (U+001F) join, matching
-// store.SplitObjectID on the server and encodeObjectId in the TS SDK.
-// Each pkObject's iteration order must match the entity's declared
-// PrimaryKeyFields() order.
-func (d *DataClient) Delete(ctx context.Context, entity string, pkObjects []map[string]any) error {
+// Composite-PK encoding matches BulkUpdate: callers pre-encode composite
+// PKs via the platform U+001F convention.
+func (d *DataClient) BulkDelete(ctx context.Context, entity string, objectIDs []string) (BulkDeleteResult, error) {
 	if entity == "" {
-		return fmt.Errorf("data delete: entity is required")
+		return BulkDeleteResult{}, fmt.Errorf("data delete: entity is required")
 	}
-	ids := make([]string, len(pkObjects))
-	for i, pk := range pkObjects {
-		id, err := encodeObjectID(pk)
-		if err != nil {
-			return fmt.Errorf("data delete %s: pkObjects[%d]: %w", entity, i, err)
-		}
-		ids[i] = id
+	if len(objectIDs) == 0 {
+		return BulkDeleteResult{}, fmt.Errorf("data delete %s: object_ids must be non-empty", entity)
 	}
 	path := fmt.Sprintf("/api/actions/%s.__delete", entity)
-	body, status, err := d.c.do(ctx, "POST", path, nil, map[string]any{"_ids": ids})
+	body := map[string]any{
+		"object_ids": objectIDs,
+		"entity":     entity,
+	}
+	envelope, err := d.dispatchWrite(ctx, path, body)
 	if err != nil {
-		return err
+		return BulkDeleteResult{}, err
+	}
+	var result struct {
+		Deleted int `json:"deleted"`
+	}
+	if err := decodeActionResult(envelope.Result, &result); err != nil {
+		return BulkDeleteResult{}, fmt.Errorf("decode delete result: %w", err)
+	}
+	return BulkDeleteResult{Deleted: result.Deleted, AuditOperationID: envelope.AuditOperationID}, nil
+}
+
+// BulkRestore un-soft-deletes rows by object_id via
+// POST /api/actions/{entity}.__restore.
+func (d *DataClient) BulkRestore(ctx context.Context, entity string, objectIDs []string) (BulkRestoreResult, error) {
+	if entity == "" {
+		return BulkRestoreResult{}, fmt.Errorf("data restore: entity is required")
+	}
+	if len(objectIDs) == 0 {
+		return BulkRestoreResult{}, fmt.Errorf("data restore %s: object_ids must be non-empty", entity)
+	}
+	path := fmt.Sprintf("/api/actions/%s.__restore", entity)
+	body := map[string]any{
+		"object_ids": objectIDs,
+		"entity":     entity,
+	}
+	envelope, err := d.dispatchWrite(ctx, path, body)
+	if err != nil {
+		return BulkRestoreResult{}, err
+	}
+	var result struct {
+		Restored int `json:"restored"`
+	}
+	if err := decodeActionResult(envelope.Result, &result); err != nil {
+		return BulkRestoreResult{}, fmt.Errorf("decode restore result: %w", err)
+	}
+	return BulkRestoreResult{Restored: result.Restored, AuditOperationID: envelope.AuditOperationID}, nil
+}
+
+// actionEnvelope is the wire shape every /api/actions/{code} success
+// response wraps the handler's typed Result into. See
+// declarion-core server/handlers/actions_dispatch.go:139-159.
+type actionEnvelope struct {
+	Status           string          `json:"status"`
+	Result           json.RawMessage `json:"result,omitempty"`
+	AuditOperationID string          `json:"audit_operation_id,omitempty"`
+	ObjectCount      int             `json:"object_count,omitempty"`
+}
+
+// dispatchWrite POSTs the FLAT action body and returns the parsed action
+// envelope. Non-2xx surfaces as APIError with body truncated.
+func (d *DataClient) dispatchWrite(ctx context.Context, path string, body map[string]any) (actionEnvelope, error) {
+	respBody, status, err := d.c.do(ctx, "POST", path, nil, body)
+	if err != nil {
+		return actionEnvelope{}, err
 	}
 	if status < 200 || status >= 300 {
-		return &APIError{StatusCode: status, Body: truncate(string(body), 500), Path: path}
+		return actionEnvelope{}, &APIError{StatusCode: status, Body: truncate(string(respBody), 500), Path: path}
 	}
-	return nil
+	var envelope actionEnvelope
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
+		return actionEnvelope{}, fmt.Errorf("unmarshal action response: %w", err)
+	}
+	return envelope, nil
 }
 
-// encodeObjectID flattens a primary-key map into the platform's opaque
-// object-ID string. Single-field PK = bare value verbatim; composite PK =
-// values joined with U+001F (ASCII Unit Separator), matching the Go-side
-// store.ObjectID join and the TS-side encodeObjectId helper. Iteration
-// order over the input must match the entity's PrimaryKeyFields()
-// declaration order - callers using composite PKs MUST construct the map
-// field-by-field in declaration order (Go's map iteration is randomized,
-// but we walk the map and join in insertion order via the platform
-// convention that single-field PK is the common case). For composite
-// PKs callers SHOULD pass an ordered structure; here we accept the
-// map but require exactly one entry for safety, otherwise we fail
-// loudly rather than silently emitting a randomized order.
-func encodeObjectID(pk map[string]any) (string, error) {
-	if len(pk) == 0 {
-		return "", fmt.Errorf("pk must contain at least one field")
+// decodeActionResult unmarshals the handler-typed `result` field into the
+// caller's struct. A nil/absent result decodes to the zero value, which is
+// the right answer when the handler returned no body (e.g. an error path
+// that still produced a 2xx envelope).
+func decodeActionResult(raw json.RawMessage, into any) error {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
 	}
-	if len(pk) == 1 {
-		for _, v := range pk {
-			return fmt.Sprint(v), nil
-		}
-	}
-	// Composite PK: Go maps have randomized iteration order, so we cannot
-	// reliably reconstruct the entity's declared PK order from a plain
-	// map. Reject rather than emit a non-deterministic ID that would
-	// mismatch store.SplitObjectID server-side. Callers with composite
-	// PKs should pre-encode their IDs via a strongly-typed helper.
-	return "", fmt.Errorf("composite primary keys (%d fields) cannot be encoded from an unordered map; pre-encode the object id", len(pk))
-}
-
-// UpsertItem is a single row returned by BulkUpsert. Fields contains all
-// entity columns plus enrichment keys ($refs, $statuses, etc.).
-// WasInserted is true when the row was created by this call (xmax = 0 in
-// Postgres), false when an existing row was updated or left unchanged.
-type UpsertItem struct {
-	Fields      map[string]any
-	WasInserted bool
-}
-
-// BulkUpsert creates or updates records using unique_fields for dedup.
-// uniqueFields is a comma-separated list of fields (e.g. "id" or "email,tenant_id").
-// conflictPredicate is an optional SQL WHERE clause for partial-index upserts
-// (e.g. "linkedin IS NOT NULL AND deleted_at IS NULL"). Pass "" for full unique constraints.
-func (d *DataClient) BulkUpsert(ctx context.Context, entity string, uniqueFields string, records []map[string]any, conflictPredicate ...string) ([]UpsertItem, error) {
-	q := url.Values{}
-	if uniqueFields != "" {
-		q.Set("unique_fields", uniqueFields)
-	}
-	if len(conflictPredicate) > 0 && conflictPredicate[0] != "" {
-		q.Set("conflict_predicate", conflictPredicate[0])
-	}
-
-	path := fmt.Sprintf("/api/data/%s", entity)
-	u := path
-	if len(q) > 0 {
-		u += "?" + q.Encode()
-	}
-
-	body, status, err := d.c.do(ctx, "POST", path, q, records)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: truncate(string(body), 500), Path: u}
-	}
-	var raw []map[string]any
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("unmarshal upsert response: %w", err)
-	}
-	items := make([]UpsertItem, len(raw))
-	for i, row := range raw {
-		wasInserted, _ := row["was_inserted"].(bool)
-		// Remove the synthetic field so Fields contains only entity data.
-		delete(row, "was_inserted")
-		items[i] = UpsertItem{Fields: row, WasInserted: wasInserted}
-	}
-	return items, nil
-}
-
-func (d *DataClient) writeMany(ctx context.Context, method, entity, queryExtra string, records []map[string]any) ([]map[string]any, error) {
-	path := fmt.Sprintf("/api/data/%s", entity)
-	var q url.Values
-	if queryExtra != "" {
-		q = url.Values{}
-		q.Set("extra", queryExtra)
-	}
-	body, status, err := d.c.do(ctx, method, path, q, records)
-	if err != nil {
-		return nil, err
-	}
-	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: truncate(string(body), 500), Path: path}
-	}
-	var result []map[string]any
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("unmarshal write response: %w", err)
-	}
-	return result, nil
+	return json.Unmarshal(raw, into)
 }
 
 func truncate(s string, max int) string {

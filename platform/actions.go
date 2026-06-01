@@ -14,10 +14,14 @@ type ActionsClient struct {
 // InvokeParams configures an action invocation.
 //
 // The request body sent to the platform is a flat JSON object: Args keys
-// are merged at the top level, and IDs is promoted to the reserved "_ids"
-// control key (required for single- and batch-scope actions). For
-// entity-scoped actions, pass the fully qualified code (e.g.
+// are merged at the top level, and IDs is promoted to the reserved
+// "object_ids" control key (required for single- and batch-scope actions).
+// For entity-scoped actions, pass the fully qualified code (e.g.
 // "lead.archive") as the Invoke `code` argument; there is no entity field.
+//
+// The legacy `_ids` key was retired in declarion-core's 2026-06-01
+// write-API rewrite and is now rejected by parseActionBody (400). Callers
+// who pre-built bodies with `_ids` must rename to `object_ids`.
 type InvokeParams struct {
 	// Args are the handler parameters (top-level keys in the JSON body).
 	Args map[string]any
@@ -47,7 +51,7 @@ func (a *ActionsClient) Invoke(ctx context.Context, code string, params InvokePa
 		body[k] = v
 	}
 	if params.IDs != nil {
-		body["_ids"] = params.IDs
+		body["object_ids"] = params.IDs
 	}
 	respBody, status, err := a.c.do(ctx, "POST", fmt.Sprintf("/api/actions/%s", code), nil, body, targetTenantOptions(params.TargetTenantID, params.TargetTenantCode)...)
 	if err != nil {

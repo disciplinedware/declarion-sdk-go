@@ -71,7 +71,7 @@ func (h *Harness) RunAllWithSidecarConfig(cfg *runtime.Config) []TestResult {
 	defer h.fakeAPI.Close()
 
 	// If a sidecar config was provided, set PlatformURL to the fake API so
-	// ctx.Platform.Data().Create() hits the harness's callback recorder.
+	// ctx.Platform.Data().BulkCreate() hits the harness's callback recorder.
 	if cfg != nil {
 		cfg.SetPlatformURL(h.fakeAPI.URL)
 	}
@@ -100,10 +100,14 @@ func (h *Harness) startFakeAPI() {
 			Baggage:     r.Header.Get("baggage"),
 			Body:        body,
 		})
-		// Return a generic success response.
+		// Return an action-API success envelope. The conformance sidecar
+		// invokes ctx.Platform.Data().BulkCreate, which decodes the response
+		// into platform.actionEnvelope: {status, result, audit_operation_id?}.
+		// Pre-2026-06-01 the legacy CRUD POST returned a bare row array;
+		// that shape is gone everywhere now.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`[{"id":"fake-1","status":"ok"}]`))
+		_, _ = w.Write([]byte(`{"status":"success","result":{"rows":[{"id":"fake-1","status":"ok"}]}}`))
 	}))
 }
 

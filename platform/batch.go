@@ -9,6 +9,13 @@ import (
 // BatchOp is one action call inside a system.batch invocation. Mirrors the
 // platform handler's BatchOp shape: {action, params}. Sync vs async is a
 // property of the target action's registration, not of the op.
+//
+// `Params` is the FLAT action body for the target endpoint — the same
+// top-level keys that POST /api/actions/{action} would carry. The system.batch
+// handler re-dispatches each op through the action layer with these params
+// applied verbatim (see declarion-core handler/batch_handler.go). No
+// `_ids` / no `items[]` wrappers; the body shape is identical to a direct
+// single-action dispatch.
 type BatchOp struct {
 	Action string         `json:"action"`
 	Params map[string]any `json:"params"`
@@ -32,10 +39,16 @@ type BatchResponse struct {
 }
 
 // Batch is a fluent builder for the system.batch action. Use NewBatch to
-// open one, .Call/.Upsert to add ops, and .Execute to send.
+// open one, .Call / .Create / .Upsert / .Update / .Delete / .Restore to add
+// ops, and .Execute to send.
 //
 // The batch is sync + atomic by definition: Execute returns once the
 // platform has committed (or rolled back) the entire transaction.
+//
+// Per-row variation across the 5 data.* actions is expressed here: one op
+// per row, one FLAT envelope per op. The system.batch dispatcher applies
+// the same permission/audit/lifecycle gate as a direct action call, so the
+// only thing the SDK has to do is build the right ops.
 type Batch struct {
 	c          *Client
 	ops        []BatchOp
@@ -66,7 +79,7 @@ func (b *Batch) WithTargetTenantCode(tenantCode string) *Batch {
 }
 
 // Call adds one op to the batch. action is the registered action code
-// (e.g. "data.upsert", "swiftward.actions.http_request"); params is the
+// (e.g. "lead.__update", "swiftward.actions.http_request"); params is the
 // handler's params struct or a pre-built map[string]any.
 //
 // The builder marshals params via encoding/json so handler-typed param
@@ -76,23 +89,82 @@ func (b *Batch) Call(action string, params any) *Batch {
 	return b
 }
 
-// Upsert is sugar for Call("data.upsert", {entity, records, mode, unique_by}).
-// Mirrors the data.upsert handler exactly; mode is one of
-// "upsert" | "insert_if_missing" (the only two modes the platform
-// currently supports). uniqueBy is the conflict key set; passing nil
-// defaults to the entity's primary key.
-func (b *Batch) Upsert(entity string, records []map[string]any, mode string, uniqueBy []string) *Batch {
+// Create adds one __create op for `entity` with the given `fields` patch.
+// Sugar for Call("<entity>.__create", {entity, fields}).
+//
+// `data.create` is one-row-per-dispatch; N independent inserts compose by
+// calling .Create N times on the same batch.
+func (b *Batch) Create(entity string, fields map[string]any) *Batch {
+	return b.Call(fmt.Sprintf("%s.__create", entity), map[string]any{
+		"entity": entity,
+		"fields": fields,
+	})
+}
+
+// Upsert adds one __upsert op for `entity` with the given `fields` patch,
+// `uniqueBy` conflict keys, and optional `mode`. Sugar for
+// Call("<entity>.__upsert", {entity, fields, unique_by, mode?}).
+//
+// mode is one of "upsert" (default, "" = upsert), "insert_if_missing",
+// "insert", "replace" per declarion-core handler/data_handler.go. The
+// platform validates the string; an unknown mode rolls the batch back.
+func (b *Batch) Upsert(entity string, fields map[string]any, uniqueBy []string, mode string) *Batch {
 	params := map[string]any{
-		"entity":  entity,
-		"records": records,
+		"entity":    entity,
+		"fields":    fields,
+		"unique_by": uniqueBy,
 	}
 	if mode != "" {
 		params["mode"] = mode
 	}
-	if len(uniqueBy) > 0 {
-		params["unique_by"] = uniqueBy
+	return b.Call(fmt.Sprintf("%s.__upsert", entity), params)
+}
+
+// Update adds one __update op for `entity` applying `fields` to every row in
+// `objectIDs`. Sugar for Call("<entity>.__update",
+// {object_ids, entity, fields, condition?, error_if_not_found?}).
+//
+// `condition` (optional) is an expr-lang CAS guard evaluated server-side
+// per row. `errorIfNotFound` (optional) flips zero-match from a silent
+// no-op to a NOT_FOUND error that rolls the batch back.
+//
+// For N rows with DIFFERENT field patches, call .Update N times — one op
+// per row.
+func (b *Batch) Update(entity string, objectIDs []string, fields map[string]any, opts ...UpdateOption) *Batch {
+	cfg := updateConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
 	}
-	return b.Call("data.upsert", params)
+	params := map[string]any{
+		"object_ids": objectIDs,
+		"entity":     entity,
+		"fields":     fields,
+	}
+	if cfg.condition != "" {
+		params["condition"] = cfg.condition
+	}
+	if cfg.errorIfNotFound {
+		params["error_if_not_found"] = true
+	}
+	return b.Call(fmt.Sprintf("%s.__update", entity), params)
+}
+
+// Delete adds one __delete op for `entity` targeting the given object_ids.
+// Sugar for Call("<entity>.__delete", {object_ids, entity}).
+func (b *Batch) Delete(entity string, objectIDs []string) *Batch {
+	return b.Call(fmt.Sprintf("%s.__delete", entity), map[string]any{
+		"object_ids": objectIDs,
+		"entity":     entity,
+	})
+}
+
+// Restore adds one __restore op for `entity` targeting the given object_ids.
+// Sugar for Call("<entity>.__restore", {object_ids, entity}).
+func (b *Batch) Restore(entity string, objectIDs []string) *Batch {
+	return b.Call(fmt.Sprintf("%s.__restore", entity), map[string]any{
+		"object_ids": objectIDs,
+		"entity":     entity,
+	})
 }
 
 // Execute sends the accumulated ops to POST /api/actions/system.batch.
@@ -101,7 +173,7 @@ func (b *Batch) Upsert(entity string, records []map[string]any, mode string, uni
 // Go error returns reflect transport / infra failures only.
 func (b *Batch) Execute(ctx context.Context) (*BatchResponse, error) {
 	if len(b.ops) == 0 {
-		return nil, fmt.Errorf("declarion: batch.Execute called with no ops; add ops via .Call or .Upsert")
+		return nil, fmt.Errorf("declarion: batch.Execute called with no ops; add ops via .Call / .Create / .Upsert / .Update / .Delete / .Restore")
 	}
 	body := map[string]any{
 		"actions": b.ops,
