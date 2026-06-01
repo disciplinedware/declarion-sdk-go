@@ -6,6 +6,21 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.10.1] - 2026-06-01
+
+### Added
+
+- `runtime.Schedulable()` option — opts a handler into dispatch from
+  declarion-core's scheduler (declarion.schedules table) and future
+  periodic-job sources. Without this flag the scheduler refuses to
+  enqueue the handler at the gate, even if an action wrapping it is
+  referenced by a schedule row. Defense-in-depth: prevents arbitrary
+  handlers from being scheduled via direct ABAC write or out-of-band
+  SQL. Required when a consumer-registered handler is intended to be
+  reachable from declarion.schedules.
+- `HandlerMetadata.Schedulable` field stores the flag; emitted as
+  `schedulable: true` in generated YAML.
+
 ## [v0.10.0] - 2026-06-01
 
 ### Added

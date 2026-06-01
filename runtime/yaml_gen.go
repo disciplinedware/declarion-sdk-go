@@ -107,6 +107,9 @@ func writeHandlerYAML(out io.Writer, r registration) error {
 	if m.Audit != nil {
 		lines = append(lines, fmt.Sprintf("    audit: %t", *m.Audit))
 	}
+	if m.Schedulable {
+		lines = append(lines, "    schedulable: true")
+	}
 
 	// Group B — webhook flags.
 	if m.IsUnauthenticated {
