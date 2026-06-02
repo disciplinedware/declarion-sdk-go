@@ -254,7 +254,7 @@ func buildModuleMount(cfg *config) (*moduleMount, error) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	manifest := fmt.Sprintf(
-		"name: %s\nkind: consumer\nversion: \"0.0.0-test\"\nrevision: \"test\"\nbuild_time: \"%s\"\n",
+		"name: %s\nkind: application\nversion: \"0.0.0-test\"\nrevision: \"test\"\nbuild_time: \"%s\"\n",
 		cfg.moduleName, now,
 	)
 	if err := os.WriteFile(filepath.Join(tmpDir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
