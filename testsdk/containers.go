@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -61,6 +62,18 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		cleanupModuleDir = mm.cleanup
 	}
 
+	// Core fail-closes on an unset DECLARION_MODULES (>= 0.4.7): every container
+	// that boots the binary - the migrate one-shot AND the API server - must
+	// name an explicit module allowlist or it refuses to start. testsdk already
+	// knows the consumer's module via WithModuleName, so derive _platform + that
+	// module: an isolated per-consumer set that leaves the platform domain
+	// modules shipped in the image (agents, commerce) inactive. A caller may
+	// override by passing DECLARION_MODULES through WithContainerEnv.
+	moduleSelector := "_platform," + cfg.moduleName
+	if v, ok := cfg.containerEnv["DECLARION_MODULES"]; ok && strings.TrimSpace(v) != "" {
+		moduleSelector = v
+	}
+
 	// Run migrations first via a one-shot container.
 	migrateReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -68,6 +81,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 			Env: map[string]string{
 				"DECLARION_DATABASE_URL": dbURL,
 				"DECLARION_MODULES_DIR":  "/app/modules",
+				"DECLARION_MODULES":      moduleSelector,
 			},
 			Cmd:        []string{"./declarion", "migrate", "apply"},
 			WaitingFor: wait.ForExit().WithExitTimeout(60 * time.Second),
@@ -124,6 +138,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		"DECLARION_JWT_SECRET":     cfg.jwtSecret,
 		"DECLARION_ROLES":          "api",
 		"DECLARION_MODULES_DIR":    "/app/modules",
+		"DECLARION_MODULES":        moduleSelector,
 		"DECLARION_SECRET_KEYS":    randomSecretKeys(),
 		"DECLARION_SECRET_PRIMARY": secretPrimaryKeyID,
 	}

@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.11.3] - 2026-06-03
+
+### Fixed
+
+- **testsdk: set `DECLARION_MODULES` on the spawned containers.** declarion-core
+  ≥ 0.4.7 fail-closes when `DECLARION_MODULES` is unset (it used to activate
+  every discovered module). `StartPlatform` now derives
+  `DECLARION_MODULES=_platform,<WithModuleName>` and sets it on both the migrate
+  one-shot and the API server container, so consumer integration tests keep
+  booting against fail-closed core. A caller may override via `WithContainerEnv`.
+
 ## [v0.11.0] - 2026-06-01
 
 ### Removed
