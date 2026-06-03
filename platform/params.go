@@ -75,26 +75,7 @@ func GetParam[T any](p *ParamsClient, ctx context.Context, code string, def T) (
 	if !found {
 		return def, nil
 	}
-
-	// Direct type assertion fast path.
-	if v, ok := value.(T); ok {
-		return v, nil
-	}
-
-	// JSON round-trip handles numeric widths (JSON numbers arrive as
-	// float64), struct shapes, multilang/locale maps, and explicit
-	// nil values (json.Unmarshal of `null` -> zero T / nil pointer).
-	b, merr := json.Marshal(value)
-	if merr != nil {
-		var zero T
-		return zero, fmt.Errorf("param %q: marshal for conversion: %w", code, merr)
-	}
-	var result T
-	if uerr := json.Unmarshal(b, &result); uerr != nil {
-		var zero T
-		return zero, fmt.Errorf("param %q: cannot convert stored %T to %T: %w", code, value, result, uerr)
-	}
-	return result, nil
+	return Convert[T](value)
 }
 
 // Convert converts a raw value (typically a string from env var) to the target type.

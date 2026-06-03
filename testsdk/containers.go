@@ -2,6 +2,9 @@ package testsdk
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -27,7 +30,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	}
 
 	// Start Postgres with a network alias.
-	pgContainer, err := postgres.Run(ctx, "postgres:17-alpine",
+	pgContainer, err := postgres.Run(ctx, "postgres:18-alpine",
 		postgres.WithDatabase("declarion"),
 		postgres.WithUsername("declarion"),
 		postgres.WithPassword("declarion"),
@@ -117,10 +120,19 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 
 	// Start the Declarion API server.
 	serverEnv := map[string]string{
-		"DECLARION_DATABASE_URL": dbURL,
-		"DECLARION_JWT_SECRET":   cfg.jwtSecret,
-		"DECLARION_ROLES":        "api",
-		"DECLARION_MODULES_DIR":  "/app/modules",
+		"DECLARION_DATABASE_URL":   dbURL,
+		"DECLARION_JWT_SECRET":     cfg.jwtSecret,
+		"DECLARION_ROLES":          "api",
+		"DECLARION_MODULES_DIR":    "/app/modules",
+		"DECLARION_SECRET_KEYS":    randomSecretKeys(),
+		"DECLARION_SECRET_PRIMARY": secretPrimaryKeyID,
+	}
+	// Effectively disable rate limiting in the test container - integration
+	// tests hammer the API and would otherwise hit HTTP 429. Uses the
+	// platform's standard DECLARION_RATE_LIMIT_* env mechanism (the same
+	// knobs core's compose sets high for local/e2e), so nothing bespoke.
+	for k, v := range testRateLimitEnv() {
+		serverEnv[k] = v
 	}
 	for k, v := range cfg.containerEnv {
 		serverEnv[k] = v
@@ -146,9 +158,16 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 
 	declarionContainer, err := testcontainers.GenericContainer(ctx, declarionReq)
 	if err != nil {
+		// Surface the container's own logs: a boot rejection (e.g. core
+		// tightening a required env var) otherwise reads as an opaque
+		// "container exited with code 1". The migrator path does the same.
+		logMsg := containerLogs(ctx, declarionContainer)
 		cleanupModuleDir()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
+		if logMsg != "" {
+			return nil, fmt.Errorf("start declarion container: %w\n--- declarion container logs ---\n%s", err, logMsg)
+		}
 		return nil, fmt.Errorf("start declarion container: %w", err)
 	}
 
@@ -313,4 +332,63 @@ func (m *moduleMount) binds() []string {
 		result = append(result, fmt.Sprintf("%s:%s", m.migrDir, base+"/migrations"))
 	}
 	return result
+}
+
+// randomHex returns a hex string of n cryptographically-random bytes (2n
+// chars). Used for the per-run test JWT secret so nothing secret-shaped is
+// hardcoded and the value always clears core's minimum-length check.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// randomSecretKeys returns a DECLARION_SECRET_KEYS JSON value carrying a
+// single random 32-byte AES-256 key under id secretPrimaryKeyID. Generated
+// per run - the platform secret codec needs a valid key to boot; testsdk
+// never decrypts with it, so a throwaway random key is sufficient.
+func randomSecretKeys() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf(`{%q:%q}`, secretPrimaryKeyID, base64.StdEncoding.EncodeToString(b))
+}
+
+// testRateLimitEnv returns DECLARION_RATE_LIMIT_* overrides that give the
+// test container effectively-unlimited token buckets, so integration tests
+// (which hammer the API) never hit HTTP 429. Reuses the platform's standard
+// per-group rate-limit env params (resolver: DECLARION_<UPPER(code)>); the
+// key_strategy per param matches the schema default so each JSON value
+// passes validation. Overridable via WithContainerEnv like any other env.
+func testRateLimitEnv() map[string]string {
+	strategy := map[string]string{
+		"DECLARION_RATE_LIMIT_PUBLIC":           "ip",
+		"DECLARION_RATE_LIMIT_USER_NORMAL":      "user_id_or_ip",
+		"DECLARION_RATE_LIMIT_BASIC_AUTH":       "ip",
+		"DECLARION_RATE_LIMIT_DEFAULT_ACTION":   "ip_and_handler",
+		"DECLARION_RATE_LIMIT_AUTH_ATTEMPT":     "ip_and_handler",
+		"DECLARION_RATE_LIMIT_AUTH_SESSION":     "ip_and_handler",
+		"DECLARION_RATE_LIMIT_EMAIL_OUTBOUND":   "ip_and_handler",
+		"DECLARION_RATE_LIMIT_TOKEN_REDEEM":     "ip_and_handler",
+		"DECLARION_RATE_LIMIT_SERVICE_INTERNAL": "user_id",
+	}
+	out := make(map[string]string, len(strategy))
+	for envName, keyStrategy := range strategy {
+		out[envName] = fmt.Sprintf(`{"burst_capacity":1000000,"refill_per_second":1000000,"key_strategy":%q}`, keyStrategy)
+	}
+	return out
+}
+
+// containerLogs best-effort reads a container's combined logs for inclusion
+// in an error message. Returns "" if logs are unavailable.
+func containerLogs(ctx context.Context, c testcontainers.Container) string {
+	if c == nil {
+		return ""
+	}
+	r, err := c.Logs(ctx)
+	if err != nil || r == nil {
+		return ""
+	}
+	defer func() { _ = r.Close() }()
+	out, _ := io.ReadAll(r)
+	return string(out)
 }

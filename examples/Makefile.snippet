@@ -30,6 +30,7 @@ gen-functions-yaml: ## Regenerate declarion/schema/_functions.generated.yaml fro
 		exit 1; \
 	fi; \
 	mv "$$TMP" "$$DST"; \
+	chmod 0644 "$$DST"; \
 	echo "regenerated $$DST"
 
 verify-functions-yaml: ## Fail if regeneration would change _functions.generated.yaml (CI drift guard)

@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	defaultJWTSecret = "testsdk-jwt-secret"
+	// defaultOwnerUser is the test owner user name (not a secret).
 	defaultOwnerUser = "testsdk-owner"
+	// secretPrimaryKeyID is the key id used in the generated
+	// DECLARION_SECRET_KEYS (see randomSecretKeys).
+	secretPrimaryKeyID = "v1"
 )
 
 // PlatformEnv holds a running Declarion platform for integration tests.
@@ -114,12 +117,17 @@ func WithContainerEnv(env map[string]string) Option {
 func StartPlatform(opts ...Option) (*PlatformEnv, error) {
 	cfg := &config{
 		image:      "declarion:latest",
-		jwtSecret:  defaultJWTSecret,
 		moduleName: "test-consumer",
 		logger:     zap.NewNop(),
 	}
 	for _, o := range opts {
 		o(cfg)
+	}
+	// Generate a fresh random JWT secret (32 bytes -> 64 hex chars, clears
+	// core's HMAC minimum) unless a test supplied one via WithJWTSecret. No
+	// secret material is hardcoded in testsdk.
+	if cfg.jwtSecret == "" {
+		cfg.jwtSecret = randomHex(32)
 	}
 
 	// External mode: use an already-running Declarion.
@@ -231,6 +239,11 @@ func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string) string {
 		Action:     "test",
 		AuditOpID:  "test-audit",
 		Scope:      runtime.HandlerTokenScope,
+		// The test actor is a superadmin: integration tests exercise handler
+		// logic against a real platform, not the RBAC layer, so the actor
+		// carries full authority and never fights permissions/role seeds.
+		// Core authorizes handler tokens from these signed claims.
+		IsSuperadmin: true,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(e.JWTSecret))
