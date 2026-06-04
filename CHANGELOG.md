@@ -6,6 +6,24 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.11.4] - 2026-06-04
+
+### Fixed
+
+- **testsdk: seed the platform `bootstrap` profile before the API container boots.**
+  declarion-core 0.5.0's `api` role reconciles the per-tenant `tenant_bootstrap`
+  profile at startup, and that profile's platform-scheduler membership `$lookup`s the
+  global `platform-scheduler@declarion.local` technical user created by the
+  `bootstrap` profile. `StartPlatform` previously ran migrate-only then booted `api`,
+  so the user never existed and the container died with
+  `reconcile tenant_bootstrap (boot): ... got 0 rows`. A new seed one-shot now runs
+  `declarion seed apply` (scoped to `DECLARION_MODULES=_platform`,
+  `DECLARION_SEED_PROFILES=bootstrap`) between migrate and api, mirroring the
+  production migrator -> seeder -> api order. The seed and api containers share one
+  `DECLARION_SECRET_KEYS` set (the seed step boots the full app, which fail-closes on
+  empty secret keys). Consumer-agnostic: it never touches a consumer's own bootstrap
+  bundle.
+
 ## [v0.11.3] - 2026-06-03
 
 ### Fixed

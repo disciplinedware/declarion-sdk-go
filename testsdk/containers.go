@@ -132,6 +132,63 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	}
 	_ = migrateContainer.Terminate(ctx)
 
+	// One AES key set shared by the seed one-shot and the API server: the seed
+	// container boots the full app (mailer included), which fail-closes on an
+	// empty DECLARION_SECRET_KEYS, and reusing the same keys keeps any encrypted
+	// value written during seeding decryptable by the API role.
+	secretKeys := randomSecretKeys()
+
+	// Seed the platform bootstrap profile via a one-shot container, mirroring the
+	// production migrator -> seeder -> api ordering. Since declarion-core 0.5.0 the
+	// `api` role reconciles the per-tenant `tenant_bootstrap` profile at boot, and
+	// that profile's platform-scheduler membership $lookup's the global
+	// `platform-scheduler@declarion.local` technical user created by the `bootstrap`
+	// profile. Without this step the API container fails to start with
+	// "reconcile tenant_bootstrap (boot): ... got 0 rows". Scoped to DECLARION_MODULES=
+	// _platform so it stays consumer-agnostic: it seeds only the platform bootstrap
+	// (platform-scheduler user, _global + default tenants) and never touches a
+	// consumer's bootstrap bundle (which may demand its own env vars).
+	seedReq := testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			Image: cfg.image,
+			Env: map[string]string{
+				"DECLARION_DATABASE_URL":   dbURL,
+				"DECLARION_MODULES_DIR":    "/app/modules",
+				"DECLARION_MODULES":        "_platform",
+				"DECLARION_SEED_PROFILES":  "bootstrap",
+				"DECLARION_SECRET_KEYS":    secretKeys,
+				"DECLARION_SECRET_PRIMARY": secretPrimaryKeyID,
+			},
+			Cmd:        []string{"./declarion", "seed", "apply"},
+			WaitingFor: wait.ForExit().WithExitTimeout(60 * time.Second),
+		},
+		Started: true,
+	}
+	if err := network.WithNetwork([]string{"test-seed"}, net)(&seedReq); err != nil {
+		cleanupModuleDir()
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		return nil, fmt.Errorf("configure seed network: %w", err)
+	}
+	seedContainer, err := testcontainers.GenericContainer(ctx, seedReq)
+	if err == nil {
+		if state, serr := seedContainer.State(ctx); serr != nil {
+			err = serr
+		} else if state.ExitCode != 0 {
+			err = fmt.Errorf("seed apply exited with code %d: %s", state.ExitCode, containerLogs(ctx, seedContainer))
+		}
+	}
+	if err != nil {
+		if seedContainer != nil {
+			_ = seedContainer.Terminate(ctx)
+		}
+		cleanupModuleDir()
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		return nil, fmt.Errorf("seed platform bootstrap: %w", err)
+	}
+	_ = seedContainer.Terminate(ctx)
+
 	// Start the Declarion API server.
 	serverEnv := map[string]string{
 		"DECLARION_DATABASE_URL":   dbURL,
@@ -139,7 +196,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		"DECLARION_ROLES":          "api",
 		"DECLARION_MODULES_DIR":    "/app/modules",
 		"DECLARION_MODULES":        moduleSelector,
-		"DECLARION_SECRET_KEYS":    randomSecretKeys(),
+		"DECLARION_SECRET_KEYS":    secretKeys,
 		"DECLARION_SECRET_PRIMARY": secretPrimaryKeyID,
 	}
 	// Effectively disable rate limiting in the test container - integration
