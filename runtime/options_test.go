@@ -101,6 +101,13 @@ func TestAllowNoObjects_sets_metadata(t *testing.T) {
 	assert.True(t, findRegistration(t, "test.ano").handlerMeta.AllowNoObjects)
 }
 
+func TestGlobalOnly_sets_metadata(t *testing.T) {
+	ClearHandlerRegistry()
+	t.Cleanup(ClearHandlerRegistry)
+	registerEcho("test.global_only", GlobalOnly())
+	assert.True(t, findRegistration(t, "test.global_only").handlerMeta.GlobalOnly)
+}
+
 func TestReadOnly_sets_metadata(t *testing.T) {
 	ClearHandlerRegistry()
 	t.Cleanup(ClearHandlerRegistry)
@@ -328,6 +335,23 @@ func TestNoAction_panics_when_combined_with_Action(t *testing.T) {
 	t.Cleanup(ClearHandlerRegistry)
 	assert.Panics(t, func() {
 		registerEcho("test.conflict", NoAction(), Action())
+	})
+}
+
+func TestInternal_initializes_actionMeta(t *testing.T) {
+	ClearHandlerRegistry()
+	t.Cleanup(ClearHandlerRegistry)
+	registerEcho("test.internal", Internal())
+	r := findRegistration(t, "test.internal")
+	require.NotNil(t, r.actionMeta, "Internal() must force an action wrapper")
+	assert.True(t, r.actionMeta.Internal)
+}
+
+func TestNoAction_panics_when_combined_with_Internal(t *testing.T) {
+	ClearHandlerRegistry()
+	t.Cleanup(ClearHandlerRegistry)
+	assert.Panics(t, func() {
+		registerEcho("test.conflict", NoAction(), Internal())
 	})
 }
 

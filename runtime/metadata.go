@@ -30,6 +30,13 @@ type HandlerMetadata struct {
 	// _object_ids (paired with invoke=unbound for tenant-scoped actions).
 	AllowNoObjects bool
 
+	// GlobalOnly marks a handler that MUST run only in the `_global` sentinel
+	// tenant (cross-tenant GC, platform self-diagnostics). declarion-core
+	// refuses to dispatch it in any normal tenant context. Emitted as
+	// `global_only: true`. Mirrors engine.Handler.GlobalOnly in
+	// declarion-core/internal/engine/types_handler.go.
+	GlobalOnly bool
+
 	// ReadOnly marks the handler as side-effect-free. Used by composites
 	// and replay paths to skip durability writes.
 	ReadOnly bool
@@ -103,6 +110,14 @@ type ActionMetadata struct {
 	// from the method name (used for actions that share a permission with
 	// a sibling action).
 	RequiredPermission string
+
+	// Internal flags an action that exists purely as a name-binding from a
+	// scheduler / queue / system anchor to its underlying handler: it is
+	// reachable from declarion.schedules but NOT over HTTP (POST
+	// /api/actions/{code} returns 404) and is hidden from action listings.
+	// Emitted as `internal: true`. Mirrors engine.Action.Internal in
+	// declarion-core/internal/engine/types_action.go.
+	Internal bool
 }
 
 // Display is the localized name + icon block emitted under actions:<code>:display.

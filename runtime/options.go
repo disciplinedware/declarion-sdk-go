@@ -10,14 +10,15 @@ import (
 // (dispatch) or actionMeta (UI/action wrapper):
 //
 //	A. Handler dispatch:     Timeout, Async, Retry, Idempotent, Invoke,
-//	                         AllowNoObjects, ReadOnly, SuppressEvents, Audit
+//	                         AllowNoObjects, GlobalOnly, ReadOnly,
+//	                         SuppressEvents, Audit
 //	B. Handler auth/security: Unauthenticated, RawBodyAccess, MaxBodyBytes,
 //	                          RequestVerifier, RequestDedupKeyExpr,
 //	                          RequestDedupKeyParam, TenantFromHeader,
 //	                          TenantFromPayloadLookup
 //	C. Action UI/metadata:   NameEN, NameRU, Icon, Destructive, LongRunning,
 //	                         ProgressScreen
-//	D. Action gate control:  Action, NoAction, RequiredPermission
+//	D. Action gate control:  Action, NoAction, Internal, RequiredPermission
 //
 // Any group-C option implicitly initializes actionMeta, causing the function
 // to be emitted as an action: entry in the generated YAML. Group-D's Action()
@@ -107,6 +108,15 @@ func Invoke(mode string) Option {
 // Emitted as `allow_no_objects: true`.
 func AllowNoObjects() Option {
 	return optionFn(func(r *registration) { r.handlerMeta.AllowNoObjects = true })
+}
+
+// GlobalOnly declares a handler that MUST run only in the `_global` sentinel
+// tenant - cross-tenant GC, platform self-diagnostics, and similar
+// platform-plane work. declarion-core enforces this once at the dispatch
+// chokepoint and refuses the handler a normal tenant context. Emitted as
+// `global_only: true`.
+func GlobalOnly() Option {
+	return optionFn(func(r *registration) { r.handlerMeta.GlobalOnly = true })
 }
 
 // ReadOnly marks the handler as side-effect-free; composites and replay paths
@@ -302,6 +312,18 @@ func Action() Option {
 // gate and no UI exposure.
 func NoAction() Option {
 	return optionFn(func(r *registration) { r.noAction = true })
+}
+
+// Internal marks the action as a scheduler-only name-binding: reachable from
+// declarion.schedules but NOT over HTTP (POST /api/actions/{code} returns 404)
+// and hidden from action listings. Initializes actionMeta on first call (the
+// action wrapper must exist for the binding). Emitted as `internal: true`.
+// Action-positive, so it conflicts with NoAction().
+func Internal() Option {
+	return optionFn(func(r *registration) {
+		ensureActionMeta(r)
+		r.actionMeta.Internal = true
+	})
 }
 
 // RequiredPermission overrides the default permission code derived from the

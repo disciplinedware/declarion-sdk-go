@@ -6,6 +6,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.12.0] - 2026-06-17
+
+### Added
+
+- **`GlobalOnly()` and `Internal()` registration options.** Two declarion-core
+  handler/action flags the YAML generator could not emit before. `GlobalOnly()`
+  marks a handler that may run only in the `_global` tenant (cross-tenant
+  cleanup, platform self-diagnostics) and emits `global_only: true`.
+  `Internal()` marks a scheduler-only action - callable from
+  `declarion.schedules` but not over HTTP, and hidden from action lists - and
+  emits `internal: true`. Derivative projects can now declare these handlers in
+  Go instead of hand-writing the YAML.
+
 ## [v0.11.4] - 2026-06-04
 
 ### Fixed

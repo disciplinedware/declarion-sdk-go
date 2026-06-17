@@ -397,6 +397,46 @@ func TestGenerateFunctionsYAML_action_destructive_and_longrunning(t *testing.T) 
 	assert.Equal(t, true, createHandler["allow_no_objects"])
 }
 
+func TestGenerateFunctionsYAML_global_only(t *testing.T) {
+	setupYAMLGenTest(t)
+
+	registerEchoFn("audit.retention_purge", GlobalOnly(), NoAction())
+
+	var buf bytes.Buffer
+	require.NoError(t, GenerateFunctionsYAML(&buf))
+
+	out := buf.String()
+	assert.Contains(t, out, "global_only: true")
+
+	var parsed struct {
+		Handlers map[string]map[string]any `yaml:"handlers"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed))
+	assert.Equal(t, true, parsed.Handlers["audit.retention_purge"]["global_only"])
+}
+
+func TestGenerateFunctionsYAML_internal_action(t *testing.T) {
+	setupYAMLGenTest(t)
+
+	registerEchoFn("sw.scheduled.sweep", Internal())
+
+	var buf bytes.Buffer
+	require.NoError(t, GenerateFunctionsYAML(&buf))
+
+	out := buf.String()
+	assert.Contains(t, out, "internal: true")
+
+	var parsed struct {
+		Actions map[string]map[string]any `yaml:"actions"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed))
+
+	entry, ok := parsed.Actions["sw.scheduled.sweep"]
+	require.True(t, ok, "Internal() must force an action wrapper")
+	assert.Equal(t, true, entry["internal"])
+	assert.Equal(t, "sw.scheduled.sweep", entry["handler"])
+}
+
 func TestGenerateFunctionsYAML_required_permission(t *testing.T) {
 	setupYAMLGenTest(t)
 

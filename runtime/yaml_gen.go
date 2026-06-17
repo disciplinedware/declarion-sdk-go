@@ -96,6 +96,9 @@ func writeHandlerYAML(out io.Writer, r registration) error {
 	if m.AllowNoObjects {
 		lines = append(lines, "    allow_no_objects: true")
 	}
+	if m.GlobalOnly {
+		lines = append(lines, "    global_only: true")
+	}
 	// ReadOnly is intentionally NOT emitted. declarion-core's Handler.ReadOnly
 	// is tagged `yaml:"-"` and dropped on load, so emitting `read_only: true`
 	// would silently lose intent. Option is kept on HandlerMetadata for
@@ -181,6 +184,9 @@ func writeActionYAML(out io.Writer, r registration) error {
 		fmt.Sprintf("    handler: %s", r.method),
 	}
 
+	if a.Internal {
+		lines = append(lines, "    internal: true")
+	}
 	if a.Display.NameEN != "" || a.Display.NameRU != "" || a.Display.Icon != "" {
 		lines = append(lines, "    display:")
 		if a.Display.NameEN != "" || a.Display.NameRU != "" {

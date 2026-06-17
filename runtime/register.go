@@ -130,6 +130,9 @@ func actionConflictNames(r *registration) []string {
 		if r.actionMeta.RequiredPermission != "" {
 			names = append(names, "RequiredPermission()")
 		}
+		if r.actionMeta.Internal {
+			names = append(names, "Internal()")
+		}
 	}
 	if len(names) == 0 {
 		names = []string{"<unknown action option>"}
