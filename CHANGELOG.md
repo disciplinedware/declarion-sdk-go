@@ -6,6 +6,15 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.13.1] - 2026-06-26
+
+### Fixed
+
+- Version-stamped the v0.13.0 release notes in this changelog. No code changes
+  from v0.13.0.
+
+## [v0.13.0] - 2026-06-26
+
 ### Added
 
 - **`testsdk.WithModuleDir`.** Consumer integration tests can now copy a real
@@ -267,5 +276,7 @@ Initial tagged release. Prior development was unversioned (consumers pinned pseu
 ### Compatibility
 - Targets declarion-core `>= 0.1.4`.
 
-[Unreleased]: https://github.com/disciplinedware/declarion-sdk-go/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/disciplinedware/declarion-sdk-go/compare/v0.13.1...HEAD
+[v0.13.1]: https://github.com/disciplinedware/declarion-sdk-go/compare/v0.13.0...v0.13.1
+[v0.13.0]: https://github.com/disciplinedware/declarion-sdk-go/compare/v0.12.2...v0.13.0
 [0.1.0]: https://github.com/disciplinedware/declarion-sdk-go/releases/tag/v0.1.0
