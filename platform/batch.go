@@ -7,18 +7,27 @@ import (
 )
 
 // BatchOp is one action call inside a system.batch invocation. Mirrors the
-// platform handler's BatchOp shape: {action, params}. Sync vs async is a
-// property of the target action's registration, not of the op.
+// platform handler's wire shape: {action, object_ids?, params}. Sync vs async
+// is a property of the target action's registration, not of the op.
 //
-// `Params` is the FLAT action body for the target endpoint — the same
-// top-level keys that POST /api/actions/{action} would carry. The system.batch
-// handler re-dispatches each op through the action layer with these params
-// applied verbatim (see declarion-core handler/batch_handler.go). No
-// `_ids` / no `items[]` wrappers; the body shape is identical to a direct
-// single-action dispatch.
+// ObjectIDs is the op's PK channel - the rows a write op addresses by primary
+// key (__update / __delete / __restore, and entity-scoped actions that select
+// existing rows). The system.batch dispatcher reads it from the op's TOP LEVEL
+// (json "object_ids"), NOT from params, into the sub-handler's ctx.ObjectIDs
+// (see declarion-core handler/batch_handler.go: BatchOp.ObjectIDs ->
+// ExecRequest.ObjectIDs). Putting object_ids inside Params leaves ctx.ObjectIDs
+// empty and the sub-handler fails with "requires object_ids". Empty for
+// __create / __upsert (which produce PKs or match by unique_by) and for
+// handlers that take no objects.
+//
+// Params is the FLAT action body for the target endpoint - the non-PK
+// top-level keys a direct POST /api/actions/{action} would carry (entity,
+// fields, condition, ...). The dispatcher applies them verbatim. No `_ids`,
+// no `items[]`, and never `object_ids` (that lives at the op top level).
 type BatchOp struct {
-	Action string         `json:"action"`
-	Params map[string]any `json:"params"`
+	Action    string         `json:"action"`
+	ObjectIDs []string       `json:"object_ids,omitempty"`
+	Params    map[string]any `json:"params"`
 }
 
 // BatchOpResult is the per-op result returned by system.batch.
@@ -89,6 +98,17 @@ func (b *Batch) Call(action string, params any) *Batch {
 	return b
 }
 
+// AddOp appends a fully-formed op verbatim - Action, ObjectIDs, and Params are
+// sent exactly as given. Use it when a higher layer already holds built
+// BatchOps (e.g. a service that assembles a heterogeneous transaction) instead
+// of the typed .Create/.Upsert/.Update/.Delete/.Restore sugar. The typed
+// helpers are themselves thin wrappers over AddOp, so the wire shape is
+// identical either way.
+func (b *Batch) AddOp(op BatchOp) *Batch {
+	b.ops = append(b.ops, op)
+	return b
+}
+
 // Create adds one __create op for `entity` with the given `fields` patch.
 // Sugar for Call("<entity>.__create", {entity, fields}).
 //
@@ -120,25 +140,25 @@ func (b *Batch) Upsert(entity string, fields map[string]any, uniqueBy []string, 
 	return b.Call(fmt.Sprintf("%s.__upsert", entity), params)
 }
 
-// Update adds one __update op for `entity` applying `fields` to every row in
-// `objectIDs`. Sugar for Call("<entity>.__update",
-// {object_ids, entity, fields, condition?, error_if_not_found?}).
+// Update adds one __update op for `entity` applying the SAME `fields` patch to
+// every row in `objectIDs`. The op carries object_ids at the TOP LEVEL (the
+// dispatcher's PK channel); params holds only the non-PK body
+// {entity, fields, condition?, error_if_not_found?}.
 //
 // `condition` (optional) is an expr-lang CAS guard evaluated server-side
 // per row. `errorIfNotFound` (optional) flips zero-match from a silent
 // no-op to a NOT_FOUND error that rolls the batch back.
 //
-// For N rows with DIFFERENT field patches, call .Update N times — one op
-// per row.
+// For N rows with DIFFERENT field patches, call .Update N times - one op per
+// row, each with a single object_id and its own fields, all in one batch.
 func (b *Batch) Update(entity string, objectIDs []string, fields map[string]any, opts ...UpdateOption) *Batch {
 	cfg := updateConfig{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	params := map[string]any{
-		"object_ids": objectIDs,
-		"entity":     entity,
-		"fields":     fields,
+		"entity": entity,
+		"fields": fields,
 	}
 	if cfg.condition != "" {
 		params["condition"] = cfg.condition
@@ -146,24 +166,30 @@ func (b *Batch) Update(entity string, objectIDs []string, fields map[string]any,
 	if cfg.errorIfNotFound {
 		params["error_if_not_found"] = true
 	}
-	return b.Call(fmt.Sprintf("%s.__update", entity), params)
-}
-
-// Delete adds one __delete op for `entity` targeting the given object_ids.
-// Sugar for Call("<entity>.__delete", {object_ids, entity}).
-func (b *Batch) Delete(entity string, objectIDs []string) *Batch {
-	return b.Call(fmt.Sprintf("%s.__delete", entity), map[string]any{
-		"object_ids": objectIDs,
-		"entity":     entity,
+	return b.AddOp(BatchOp{
+		Action:    fmt.Sprintf("%s.__update", entity),
+		ObjectIDs: objectIDs,
+		Params:    params,
 	})
 }
 
-// Restore adds one __restore op for `entity` targeting the given object_ids.
-// Sugar for Call("<entity>.__restore", {object_ids, entity}).
+// Delete adds one __delete op for `entity` targeting the given object_ids
+// (carried at the op top level, not in params).
+func (b *Batch) Delete(entity string, objectIDs []string) *Batch {
+	return b.AddOp(BatchOp{
+		Action:    fmt.Sprintf("%s.__delete", entity),
+		ObjectIDs: objectIDs,
+		Params:    map[string]any{"entity": entity},
+	})
+}
+
+// Restore adds one __restore op for `entity` targeting the given object_ids
+// (carried at the op top level, not in params).
 func (b *Batch) Restore(entity string, objectIDs []string) *Batch {
-	return b.Call(fmt.Sprintf("%s.__restore", entity), map[string]any{
-		"object_ids": objectIDs,
-		"entity":     entity,
+	return b.AddOp(BatchOp{
+		Action:    fmt.Sprintf("%s.__restore", entity),
+		ObjectIDs: objectIDs,
+		Params:    map[string]any{"entity": entity},
 	})
 }
 

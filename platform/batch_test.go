@@ -56,13 +56,13 @@ func TestBatch_typed_helpers_build_flat_envelopes(t *testing.T) {
 	}
 	assertOpFlat(t, b.ops[1])
 
-	// Op 2: __update — object_ids + entity + fields + condition + error_if_not_found.
+	// Op 2: __update — object_ids at the op TOP LEVEL; params = entity + fields
+	// + condition + error_if_not_found (NO object_ids in params).
 	if b.ops[2].Action != "lead.__update" {
 		t.Errorf("ops[2].action: got %q", b.ops[2].Action)
 	}
-	ids, ok := b.ops[2].Params["object_ids"].([]string)
-	if !ok || len(ids) != 1 || ids[0] != "u1" {
-		t.Errorf("ops[2].object_ids: got %+v", b.ops[2].Params["object_ids"])
+	if len(b.ops[2].ObjectIDs) != 1 || b.ops[2].ObjectIDs[0] != "u1" {
+		t.Errorf("ops[2].ObjectIDs: got %+v, want [u1]", b.ops[2].ObjectIDs)
 	}
 	if b.ops[2].Params["condition"] != "entity.status == 'pending'" {
 		t.Errorf("ops[2].condition: got %v", b.ops[2].Params["condition"])
@@ -72,46 +72,57 @@ func TestBatch_typed_helpers_build_flat_envelopes(t *testing.T) {
 	}
 	assertOpFlat(t, b.ops[2])
 
-	// Op 3: __delete — object_ids + entity only.
+	// Op 3: __delete — object_ids at the op top level; params = entity only.
 	if b.ops[3].Action != "lead.__delete" {
 		t.Errorf("ops[3].action: got %q", b.ops[3].Action)
 	}
 	if _, ok := b.ops[3].Params["fields"]; ok {
 		t.Errorf("__delete must not carry fields: %+v", b.ops[3].Params)
 	}
-	delIDs, ok := b.ops[3].Params["object_ids"].([]string)
-	if !ok || len(delIDs) != 2 {
-		t.Errorf("ops[3].object_ids: got %+v", b.ops[3].Params["object_ids"])
+	if len(b.ops[3].ObjectIDs) != 2 || b.ops[3].ObjectIDs[0] != "u1" || b.ops[3].ObjectIDs[1] != "u2" {
+		t.Errorf("ops[3].ObjectIDs: got %+v, want [u1 u2]", b.ops[3].ObjectIDs)
 	}
 	assertOpFlat(t, b.ops[3])
 
-	// Op 4: __restore — object_ids + entity only.
+	// Op 4: __restore — object_ids at the op top level; params = entity only.
 	if b.ops[4].Action != "lead.__restore" {
 		t.Errorf("ops[4].action: got %q", b.ops[4].Action)
 	}
 	if _, ok := b.ops[4].Params["fields"]; ok {
 		t.Errorf("__restore must not carry fields: %+v", b.ops[4].Params)
 	}
+	if len(b.ops[4].ObjectIDs) != 1 || b.ops[4].ObjectIDs[0] != "u3" {
+		t.Errorf("ops[4].ObjectIDs: got %+v, want [u3]", b.ops[4].ObjectIDs)
+	}
 	assertOpFlat(t, b.ops[4])
 }
 
-// assertOpFlat fails the test if a batch op's params carry any of the
-// legacy wrapper keys the 2026-06-01 envelope explicitly forbids.
+// assertOpFlat fails the test if a batch op's params carry any forbidden key.
+// `object_ids` is forbidden in params because it is the op's TOP-LEVEL PK
+// channel (server reads BatchOp.ObjectIDs, never params.object_ids); the rest
+// are legacy wrapper keys the 2026-06-01 envelope dropped.
 func assertOpFlat(t *testing.T, op BatchOp) {
 	t.Helper()
-	for _, k := range []string{"_ids", "items", "records", "params"} {
+	for _, k := range []string{"_ids", "items", "records", "params", "object_ids"} {
 		if _, ok := op.Params[k]; ok {
-			t.Errorf("op %q params must not carry %q (got %+v)", op.Action, k, op.Params)
+			t.Errorf("op %q params must not carry %q (got %+v); object_ids belongs at the op top level", op.Action, k, op.Params)
 		}
 	}
 }
 
 // TestBatch_Update_omits_optional_fields proves zero-value UpdateOptions
-// do not emit `condition: ""` / `error_if_not_found: false` on the wire.
+// do not emit `condition: ""` / `error_if_not_found: false` on the wire, and
+// that object_ids sits at the op top level (never in params).
 func TestBatch_Update_omits_optional_fields(t *testing.T) {
 	b := (&Client{}).NewBatch().Update("lead", []string{"u1"}, map[string]any{"name": "x"})
 	if len(b.ops) != 1 {
 		t.Fatalf("ops: got %d", len(b.ops))
+	}
+	if len(b.ops[0].ObjectIDs) != 1 || b.ops[0].ObjectIDs[0] != "u1" {
+		t.Errorf("object_ids must be at the op top level: ObjectIDs=%+v", b.ops[0].ObjectIDs)
+	}
+	if _, ok := b.ops[0].Params["object_ids"]; ok {
+		t.Errorf("object_ids must NOT be in params: %+v", b.ops[0].Params)
 	}
 	if _, ok := b.ops[0].Params["condition"]; ok {
 		t.Errorf("condition must be absent when not set: %+v", b.ops[0].Params)
@@ -119,6 +130,69 @@ func TestBatch_Update_omits_optional_fields(t *testing.T) {
 	if _, ok := b.ops[0].Params["error_if_not_found"]; ok {
 		t.Errorf("error_if_not_found must be absent when false: %+v", b.ops[0].Params)
 	}
+}
+
+// TestBatch_Update_wire_puts_object_ids_top_level is the regression guard for
+// the SDK<->server envelope mismatch: a client-side op-shape unit test cannot
+// catch it (the op looks fine in memory), so this drives a real Execute against
+// an httptest server and asserts the SERIALIZED op carries object_ids at the
+// op top level and NOT inside params - exactly where declarion-core's
+// system.batch dispatcher reads it (handler/batch_handler.go BatchOp.ObjectIDs).
+// Before the fix this arrived as params.object_ids and the server raised
+// "requires object_ids".
+func TestBatch_Update_wire_puts_object_ids_top_level(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Actions []map[string]any `json:"actions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if len(body.Actions) != 1 {
+			t.Fatalf("actions: got %d, want 1", len(body.Actions))
+		}
+		op := body.Actions[0]
+		ids, ok := op["object_ids"].([]any)
+		if !ok || len(ids) != 1 || ids[0] != "u1" {
+			t.Errorf("wire op.object_ids (top level): got %v", op["object_ids"])
+		}
+		params, _ := op["params"].(map[string]any)
+		if _, present := params["object_ids"]; present {
+			t.Errorf("wire op.params must NOT carry object_ids: %v", params)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","result":{"committed":true,"results":[{"index":0,"ok":true}]}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	c := New(Config{BaseURL: srv.URL})
+	resp, err := c.NewBatch().
+		Update("lead", []string{"u1"}, map[string]any{"name": "x"}).
+		Execute(t.Context())
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !resp.Committed {
+		t.Fatal("expected committed=true")
+	}
+}
+
+// TestBatch_AddOp_passthrough proves a pre-built op (the path swiftward's
+// worker uses to ship []BatchOp it assembled itself) reaches the wire verbatim,
+// object_ids at the op top level.
+func TestBatch_AddOp_passthrough(t *testing.T) {
+	b := (&Client{}).NewBatch().AddOp(BatchOp{
+		Action:    "data.update",
+		ObjectIDs: []string{"x1"},
+		Params:    map[string]any{"entity": "lead", "fields": map[string]any{"name": "y"}},
+	})
+	if len(b.ops) != 1 {
+		t.Fatalf("ops: got %d", len(b.ops))
+	}
+	if b.ops[0].Action != "data.update" || len(b.ops[0].ObjectIDs) != 1 || b.ops[0].ObjectIDs[0] != "x1" {
+		t.Errorf("AddOp did not pass through verbatim: %+v", b.ops[0])
+	}
+	assertOpFlat(t, b.ops[0])
 }
 
 // TestBatch_Upsert_omits_mode_when_blank — empty mode stays off the wire.

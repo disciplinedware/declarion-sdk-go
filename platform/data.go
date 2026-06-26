@@ -41,6 +41,28 @@ type DataClient struct {
 //
 // Do not mix modes - setting both cursor and offset params is ambiguous.
 // The server silently prefers cursor on conflict; the SDK matches that.
+
+// CountMode selects how List computes the total row count, mirroring the
+// platform's `count` query param (declarion-core data_list_params.go
+// parseCountMode). The zero value (CountNone) returns no total.
+type CountMode string
+
+const (
+	// CountNone returns no total (Meta.Total = 0); the page-window query alone runs.
+	CountNone CountMode = ""
+	// CountWith returns rows + a total computed with the ENTITY'S declared
+	// strategy: an entity marked `count: estimated` answers from an O(1)
+	// query-planner estimate, NOT an exact COUNT(*). Use for UI lists where an
+	// approximate total is acceptable.
+	CountWith CountMode = "with"
+	// CountOnly returns the total ONLY (no row window) - same strategy as CountWith.
+	CountOnly CountMode = "only"
+	// CountExact returns rows + a FORCED exact COUNT(*), overriding an
+	// `estimated` entity strategy. Use when the total must be precise (a
+	// full table scan - more expensive on large tables).
+	CountExact CountMode = "exact"
+)
+
 type ListParams struct {
 	// Cursor mode.
 	Limit int    // max rows per page; server clamps to 1-1000 (default 50).
@@ -56,10 +78,13 @@ type ListParams struct {
 	Filters []FilterNode // structured filter tree (see filter.go). Serialized as JSON in `filters`.
 	Select  []string     // field projection; empty = all columns.
 
-	// IncludeCount opts into COUNT(*). Cursor mode omits count by default to
-	// save a query; set this true when the UI wants a total. Offset mode
-	// runs count unconditionally.
-	IncludeCount bool
+	// Count selects the total-count strategy, mapping to the platform's `count`
+	// query param. Empty (CountNone) returns no total (Meta.Total = 0). Cursor
+	// mode omits count by default to save a query; set this when a total is
+	// wanted. See CountMode for the modes - notably CountExact forces an exact
+	// COUNT(*) even for an entity whose declared strategy is `estimated`, which
+	// CountWith would otherwise answer from a planner estimate.
+	Count CountMode
 
 	// IncludeDeleted is permission-gated server-side (view_deleted). Silently
 	// ignored without the permission.
@@ -141,7 +166,7 @@ func (d *DataClient) Get(ctx context.Context, entity string, pk map[string]any) 
 //   - sort, search            - both modes
 //   - filters                 - JSON-encoded []FilterNode (omitted when empty)
 //   - select                  - comma-separated field list
-//   - include_count=true      - opt-in count in cursor mode
+//   - count=with|only|exact   - total-count strategy (ListParams.Count)
 //   - include_deleted=true    - permission-gated soft-deleted rows
 func (d *DataClient) List(ctx context.Context, entity string, params ListParams) (*ListResponse, error) {
 	q := url.Values{}
@@ -173,8 +198,11 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 	if len(params.Select) > 0 {
 		q.Set("select", strings.Join(params.Select, ","))
 	}
-	if params.IncludeCount {
-		q.Set("include_count", "true")
+	if params.Count != CountNone {
+		// The platform reads the row-count strategy from `count` (modes
+		// only/with/exact via parseCountMode). A legacy boolean `include_count`
+		// is rejected as PARAM_UNKNOWN by the current platform.
+		q.Set("count", string(params.Count))
 	}
 	if params.IncludeDeleted {
 		q.Set("include_deleted", "true")

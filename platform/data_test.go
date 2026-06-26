@@ -107,7 +107,7 @@ func TestList_query_params(t *testing.T) {
 		Sort:           "-created_at",
 		Search:         "acme",
 		Select:         []string{"id", "name", "company_id"},
-		IncludeCount:   true,
+		Count:          CountWith,
 		IncludeDeleted: true,
 		Filters: []FilterNode{
 			IsEmpty("company_id"),
@@ -124,13 +124,18 @@ func TestList_query_params(t *testing.T) {
 		"sort":            "-created_at",
 		"search":          "acme",
 		"select":          "id,name,company_id",
-		"include_count":   "true",
+		"count":           "with",
 		"include_deleted": "true",
 	}
 	for k, v := range want {
 		if got := captured.Get(k); got != v {
 			t.Errorf("query[%s]: got %q, want %q", k, got, v)
 		}
+	}
+	// Regression: the legacy boolean param must never be emitted - the platform
+	// rejects it as PARAM_UNKNOWN. IncludeCount maps to count=with.
+	if captured.Has("include_count") {
+		t.Errorf("legacy include_count must not be emitted; got %q", captured.Get("include_count"))
 	}
 
 	rawFilters := captured.Get("filters")
@@ -166,7 +171,7 @@ func TestList_omits_empty_params(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 
-	forbidden := []string{"limit", "after", "page", "per_page", "sort", "search", "filters", "select", "include_count", "include_deleted"}
+	forbidden := []string{"limit", "after", "page", "per_page", "sort", "search", "filters", "select", "count", "include_count", "include_deleted"}
 	for _, k := range forbidden {
 		if _, ok := captured[k]; ok {
 			t.Errorf("empty ListParams must not emit %q (got %q)", k, captured.Get(k))
