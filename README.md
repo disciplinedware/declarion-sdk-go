@@ -172,6 +172,24 @@ into consumer code).
 - SIGTERM graceful shutdown
 - `/health` endpoint for readiness probes
 
+## Integration tests
+
+Use `testsdk.StartPlatform` to run consumer integration tests against a real
+Declarion container plus Postgres. Prefer `testsdk.WithModuleDir` and point it
+at the consumer's committed module root:
+
+```go
+env, err := testsdk.StartPlatform(
+    testsdk.WithImage("ghcr.io/disciplinedware/declarion:0.24.0"),
+    testsdk.WithModuleDir("../../modules/your-module"),
+)
+```
+
+`WithModuleDir` requires the directory basename and `manifest.yaml:name` to
+match. The SDK copies the module tree into the container through Docker's file
+copy API; it does not bind-mount host paths. `WithSchema` and `WithMigrations`
+remain for synthetic test modules.
+
 ## Error handling
 
 Return `*runtime.AppError` for structured JSON-RPC errors:

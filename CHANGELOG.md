@@ -6,6 +6,30 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **`testsdk.WithModuleDir`.** Consumer integration tests can now copy a real
+  Declarion module root into the test platform container. The directory basename
+  and `manifest.yaml:name` must match, so tests exercise the same module layout
+  production images ship.
+- **`platform.CountMode`.** `ListParams.Count` now maps to the platform
+  `count=with|only|exact` query contract.
+- **`platform.BatchOp.ObjectIDs` and `Batch.AddOp`.** Batch operations now carry
+  `object_ids` at the operation top level, matching `system.batch`.
+
+### Changed
+
+- **testsdk module loading no longer uses Docker bind mounts.** `StartPlatform`
+  copies module trees into the Declarion containers through testcontainers'
+  file-copy API, which avoids host permission leaks and works better with
+  non-root images, Windows hosts, and remote Docker.
+
+### Removed
+
+- **BREAKING.** `platform.ListParams.IncludeCount` was replaced by
+  `ListParams.Count`. Use `platform.CountWith` for the old rows-plus-total
+  behavior.
+
 ## [v0.12.0] - 2026-06-17
 
 ### Added

@@ -42,7 +42,9 @@ type PlatformEnv struct {
 
 	stopFn          func()
 	logger          *zap.Logger
-	serverContainer interface{ Logs(context.Context) (io.ReadCloser, error) }
+	serverContainer interface {
+		Logs(context.Context) (io.ReadCloser, error)
+	}
 }
 
 // ServerLogs returns the Declarion server container's stdout/stderr logs.
@@ -64,28 +66,43 @@ func (e *PlatformEnv) ServerLogs() string {
 type Option func(*config)
 
 type config struct {
+	moduleDir     string
 	schemaDir     string
 	migrationsDir string
 	moduleName    string
+	moduleNameSet bool
 	image         string
 	jwtSecret     string
 	containerEnv  map[string]string
 	logger        *zap.Logger
 }
 
-// WithSchema sets the consumer schema directory to mount into the Declarion container.
+// WithModuleDir sets the consumer module root to copy into the Declarion container.
+// The directory must contain manifest.yaml and use the same basename as the
+// manifest's name. This is the preferred path for consumer integration tests
+// because it exercises the same module layout that production images ship.
+func WithModuleDir(dir string) Option {
+	return func(c *config) { c.moduleDir = dir }
+}
+
+// WithSchema sets the consumer schema directory to copy into the Declarion container.
+// Prefer WithModuleDir when the consumer has a real module root with manifest.yaml.
 func WithSchema(dir string) Option {
 	return func(c *config) { c.schemaDir = dir }
 }
 
-// WithMigrations sets the consumer migrations directory.
+// WithMigrations sets the consumer migrations directory to copy into the Declarion container.
+// Prefer WithModuleDir when the consumer has a real module root with manifest.yaml.
 func WithMigrations(dir string) Option {
 	return func(c *config) { c.migrationsDir = dir }
 }
 
 // WithModuleName sets the consumer module name (default: "test-consumer").
 func WithModuleName(name string) Option {
-	return func(c *config) { c.moduleName = name }
+	return func(c *config) {
+		c.moduleName = name
+		c.moduleNameSet = true
+	}
 }
 
 // WithImage overrides the Declarion Docker image (default: ghcr.io/disciplinedware/declarion:latest).
@@ -221,7 +238,6 @@ func (e *PlatformEnv) SetParam(t *testing.T, ctx *runtime.Ctx, code string, valu
 	t.Logf("SetParam %q=%v (requires WithContainerEnv at startup for env-backed params)", code, value)
 }
 
-
 func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string) string {
 	now := time.Now()
 	claims := &runtime.HandlerClaims{
@@ -267,4 +283,3 @@ func (e *PlatformEnv) waitForHealth(timeout time.Duration) error {
 	}
 	return fmt.Errorf("platform not healthy after %s", timeout)
 }
-

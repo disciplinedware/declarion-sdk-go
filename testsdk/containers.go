@@ -9,15 +9,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/network"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 // startContainers starts Postgres + Declarion via testcontainers-go on a shared network.
@@ -50,16 +51,16 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	// Declarion connects to Postgres via the internal network alias.
 	dbURL := "postgres://declarion:declarion@test-pg:5432/declarion?sslmode=disable"
 
-	// Build module mount (manifest + schema + migrations).
-	mm, err := buildModuleMount(cfg)
+	// Build the consumer module bundle copied into Declarion containers.
+	mb, err := buildModuleBundle(cfg)
 	if err != nil {
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
-		return nil, fmt.Errorf("build module mount: %w", err)
+		return nil, fmt.Errorf("build module bundle: %w", err)
 	}
-	cleanupModuleDir := func() {}
-	if mm != nil {
-		cleanupModuleDir = mm.cleanup
+	cleanupModuleBundle := func() {}
+	if mb != nil {
+		cleanupModuleBundle = mb.cleanup
 	}
 
 	// Core fail-closes on an unset DECLARION_MODULES (>= 0.4.7): every container
@@ -88,9 +89,9 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		},
 		Started: true,
 	}
-	attachModuleBinds(&migrateReq, mm)
+	attachModuleBundleFiles(&migrateReq, mb)
 	if err := network.WithNetwork([]string{"test-migrate"}, net)(&migrateReq); err != nil {
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("configure migration network: %w", err)
@@ -98,7 +99,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 
 	migrateContainer, err := testcontainers.GenericContainer(ctx, migrateReq)
 	if err != nil {
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("run migrations: %w", err)
@@ -115,7 +116,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 			logMsg = string(logBytes)
 		}
 		_ = migrateContainer.Terminate(ctx)
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		if err != nil {
@@ -165,7 +166,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		Started: true,
 	}
 	if err := network.WithNetwork([]string{"test-seed"}, net)(&seedReq); err != nil {
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("configure seed network: %w", err)
@@ -182,7 +183,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		if seedContainer != nil {
 			_ = seedContainer.Terminate(ctx)
 		}
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("seed platform bootstrap: %w", err)
@@ -220,9 +221,9 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		},
 		Started: true,
 	}
-	attachModuleBinds(&declarionReq, mm)
+	attachModuleBundleFiles(&declarionReq, mb)
 	if err := network.WithNetwork([]string{"test-declarion"}, net)(&declarionReq); err != nil {
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("configure declarion network: %w", err)
@@ -234,7 +235,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		// tightening a required env var) otherwise reads as an opaque
 		// "container exited with code 1". The migrator path does the same.
 		logMsg := containerLogs(ctx, declarionContainer)
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		if logMsg != "" {
@@ -246,7 +247,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	declarionHost, err := declarionContainer.Host(ctx)
 	if err != nil {
 		_ = declarionContainer.Terminate(ctx)
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("get declarion host: %w", err)
@@ -254,7 +255,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	declarionPort, err := declarionContainer.MappedPort(ctx, "3000/tcp")
 	if err != nil {
 		_ = declarionContainer.Terminate(ctx)
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		return nil, fmt.Errorf("get declarion port: %w", err)
@@ -269,7 +270,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		_ = declarionContainer.Terminate(ctx)
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
-		cleanupModuleDir()
+		cleanupModuleBundle()
 		return nil, fmt.Errorf("bootstrap tenant: %w", err)
 	}
 
@@ -281,15 +282,14 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 		logger:          cfg.logger,
 		serverContainer: declarionContainer,
 		stopFn: func() {
-			termCtx := context.Background()
-			if err := declarionContainer.Terminate(termCtx); err != nil {
-				cfg.logger.Warn("stop declarion container", zap.Error(err))
-			}
-			if err := pgContainer.Terminate(termCtx); err != nil {
-				cfg.logger.Warn("stop postgres container", zap.Error(err))
-			}
-			_ = net.Remove(termCtx)
-			cleanupModuleDir()
+			runCleanupStep(cfg.logger, "stop declarion container", func(ctx context.Context) error {
+				return declarionContainer.Terminate(ctx)
+			})
+			runCleanupStep(cfg.logger, "stop postgres container", func(ctx context.Context) error {
+				return pgContainer.Terminate(ctx)
+			})
+			runCleanupStep(cfg.logger, "remove test network", net.Remove)
+			cleanupModuleBundle()
 		},
 	}
 
@@ -300,7 +300,17 @@ const (
 	systemTenantID   = "00000000-0000-0000-0000-000000000001"
 	systemTenantCode = "test"
 	systemUserID     = "00000000-0000-0000-0000-000000000002"
+
+	containerCleanupTimeout = 30 * time.Second
 )
+
+func runCleanupStep(logger *zap.Logger, label string, fn func(context.Context) error) {
+	ctx, cancel := context.WithTimeout(context.Background(), containerCleanupTimeout)
+	defer cancel()
+	if err := fn(ctx); err != nil {
+		logger.Warn(label, zap.Error(err))
+	}
+}
 
 // bootstrapTenant creates the initial tenant + owner user in the DB via psql.
 func bootstrapTenant(ctx context.Context, pgContainer *postgres.PostgresContainer, net *testcontainers.DockerNetwork) error {
@@ -323,87 +333,159 @@ func bootstrapTenant(ctx context.Context, pgContainer *postgres.PostgresContaine
 	return nil
 }
 
-// moduleMount holds the resolved paths and manifest for mounting into containers.
-type moduleMount struct {
-	manifestDir string // temp dir containing manifest.yaml
-	schemaDir   string // absolute path to schema/
-	migrDir     string // absolute path to migrations/
-	moduleName  string
-	cleanup     func()
+const (
+	hostDirMode             os.FileMode = 0o755
+	hostFileMode            os.FileMode = 0o644
+	containerModuleTreeMode int64       = 0o755
+)
+
+var moduleNamePattern = regexp.MustCompile(`^_?[a-z][a-z0-9-]*$`)
+
+// moduleBundle is the consumer module root copied into each Declarion container.
+type moduleBundle struct {
+	sourceDir  string // absolute path to <moduleName>/ containing manifest.yaml
+	moduleName string
+	cleanup    func()
 }
 
-// buildModuleMount resolves paths and creates the manifest.yaml in a temp dir.
-func buildModuleMount(cfg *config) (*moduleMount, error) {
+// buildModuleBundle resolves or stages the consumer module root. The returned
+// directory is copied into /app/modules; no host bind mounts are used.
+func buildModuleBundle(cfg *config) (*moduleBundle, error) {
+	if strings.TrimSpace(cfg.moduleDir) != "" {
+		if cfg.schemaDir != "" || cfg.migrationsDir != "" {
+			return nil, fmt.Errorf("WithModuleDir cannot be combined with WithSchema or WithMigrations")
+		}
+		return buildModuleDirBundle(cfg)
+	}
 	if cfg.schemaDir == "" && cfg.migrationsDir == "" {
 		return nil, nil
 	}
+	return buildSyntheticModuleBundle(cfg)
+}
 
-	tmpDir, err := os.MkdirTemp("", "testsdk-manifest-*")
+func buildModuleDirBundle(cfg *config) (*moduleBundle, error) {
+	abs, err := filepath.Abs(cfg.moduleDir)
 	if err != nil {
-		return nil, fmt.Errorf("create temp dir: %w", err)
+		return nil, fmt.Errorf("resolve module dir: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("stat module dir: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("module dir %q is not a directory", abs)
+	}
+
+	manifestName, err := readModuleManifestName(abs)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateModuleName(manifestName); err != nil {
+		return nil, fmt.Errorf("manifest module name: %w", err)
+	}
+	if cfg.moduleNameSet && cfg.moduleName != manifestName {
+		return nil, fmt.Errorf("WithModuleName(%q) does not match %s name %q", cfg.moduleName, filepath.Join(abs, "manifest.yaml"), manifestName)
+	}
+	if !cfg.moduleNameSet {
+		cfg.moduleName = manifestName
+	}
+	if filepath.Base(abs) != cfg.moduleName {
+		return nil, fmt.Errorf("module dir basename %q does not match module name %q", filepath.Base(abs), cfg.moduleName)
+	}
+	return &moduleBundle{sourceDir: abs, moduleName: cfg.moduleName, cleanup: func() {}}, nil
+}
+
+func buildSyntheticModuleBundle(cfg *config) (*moduleBundle, error) {
+	if err := validateModuleName(cfg.moduleName); err != nil {
+		return nil, fmt.Errorf("module name: %w", err)
+	}
+	tmpRoot, err := os.MkdirTemp("", "testsdk-module-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp module root: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(tmpRoot) }
+
+	moduleRoot := filepath.Join(tmpRoot, cfg.moduleName)
+	if err := os.MkdirAll(moduleRoot, hostDirMode); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("create module dir: %w", err)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	manifest := fmt.Sprintf(
-		"name: %s\nkind: application\nversion: \"0.0.0-test\"\nrevision: \"test\"\nbuild_time: \"%s\"\n",
+		"name: %s\nkind: application\nversion: \"0.0.0-test\"\nrevision: \"test\"\nbuild_time: \"%s\"\nschema_dir: schema\nmigrations_dir: migrations\n",
 		cfg.moduleName, now,
 	)
-	if err := os.WriteFile(filepath.Join(tmpDir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
-		_ = os.RemoveAll(tmpDir)
+	if err := os.WriteFile(filepath.Join(moduleRoot, "manifest.yaml"), []byte(manifest), hostFileMode); err != nil {
+		cleanup()
 		return nil, fmt.Errorf("write manifest: %w", err)
 	}
 
-	m := &moduleMount{
-		manifestDir: tmpDir,
-		moduleName:  cfg.moduleName,
-		cleanup:     func() { _ = os.RemoveAll(tmpDir) },
-	}
-
 	if cfg.schemaDir != "" {
-		m.schemaDir, err = filepath.Abs(cfg.schemaDir)
-		if err != nil {
-			m.cleanup()
-			return nil, fmt.Errorf("resolve schema dir: %w", err)
+		if err := copyDir(filepath.Join(moduleRoot, "schema"), cfg.schemaDir); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("copy schema dir: %w", err)
 		}
 	}
 	if cfg.migrationsDir != "" {
-		m.migrDir, err = filepath.Abs(cfg.migrationsDir)
-		if err != nil {
-			m.cleanup()
-			return nil, fmt.Errorf("resolve migrations dir: %w", err)
+		if err := copyDir(filepath.Join(moduleRoot, "migrations"), cfg.migrationsDir); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("copy migrations dir: %w", err)
 		}
 	}
-	return m, nil
-}
-func attachModuleBinds(req *testcontainers.GenericContainerRequest, m *moduleMount) {
-	if req == nil || m == nil {
-		return
-	}
-	binds := m.binds()
-	prev := req.HostConfigModifier
-	req.HostConfigModifier = func(hostConfig *container.HostConfig) {
-		if prev != nil {
-			prev(hostConfig)
-		}
-		hostConfig.Binds = append(hostConfig.Binds, binds...)
-	}
+
+	return &moduleBundle{sourceDir: moduleRoot, moduleName: cfg.moduleName, cleanup: cleanup}, nil
 }
 
-// binds returns the host binds for a container. Each real directory gets its
-// own mount (no symlinks - Docker bind mounts don't follow host-side symlinks).
-func (m *moduleMount) binds() []string {
-	base := fmt.Sprintf("/app/modules/%s", m.moduleName)
-	result := []string{
-		// Manifest lives in the temp dir.
-		fmt.Sprintf("%s:%s", filepath.Join(m.manifestDir, "manifest.yaml"), base+"/manifest.yaml"),
+func attachModuleBundleFiles(req *testcontainers.GenericContainerRequest, b *moduleBundle) {
+	if req == nil || b == nil {
+		return
 	}
-	if m.schemaDir != "" {
-		result = append(result, fmt.Sprintf("%s:%s", m.schemaDir, base+"/schema"))
+	req.Files = append(req.Files, testcontainers.ContainerFile{
+		HostFilePath:      b.sourceDir,
+		ContainerFilePath: fmt.Sprintf("/app/modules/%s", b.moduleName),
+		FileMode:          containerModuleTreeMode,
+	})
+}
+
+func readModuleManifestName(moduleDir string) (string, error) {
+	manifestPath := filepath.Join(moduleDir, "manifest.yaml")
+	b, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return "", fmt.Errorf("read manifest %s: %w", manifestPath, err)
 	}
-	if m.migrDir != "" {
-		result = append(result, fmt.Sprintf("%s:%s", m.migrDir, base+"/migrations"))
+	var manifest struct {
+		Name string `yaml:"name"`
 	}
-	return result
+	if err := yaml.Unmarshal(b, &manifest); err != nil {
+		return "", fmt.Errorf("parse manifest %s: %w", manifestPath, err)
+	}
+	return manifest.Name, nil
+}
+
+func validateModuleName(name string) error {
+	if !moduleNamePattern.MatchString(name) {
+		return fmt.Errorf("%q is invalid (must match %s)", name, moduleNamePattern)
+	}
+	return nil
+}
+
+func copyDir(dst, src string) error {
+	abs, err := filepath.Abs(src)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", src, err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", abs, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", abs)
+	}
+	if err := os.CopyFS(dst, os.DirFS(abs)); err != nil {
+		return fmt.Errorf("%s -> %s: %w", abs, dst, err)
+	}
+	return nil
 }
 
 // randomHex returns a hex string of n cryptographically-random bytes (2n
