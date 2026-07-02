@@ -190,6 +190,43 @@ match. The SDK copies the module tree into the container through Docker's file
 copy API; it does not bind-mount host paths. `WithSchema` and `WithMigrations`
 remain for synthetic test modules.
 
+`StartPlatform` bootstraps a REAL, DB-backed platform-operator test actor (not
+merely a forged JWT claim): a `users` row, `_global` tenant ownership, and the
+`platform_admin` role (mirroring declarion-core's own
+`internal/auth/platform_operator.go` `grantPlatformOperatorTx` and migration
+`097_superadmin_global_backfill.up.sql` exactly - same table shapes, same
+constraint names). This is required because declarion-core's tenant-scoped
+authority model (v0.29.0+,
+`docs/plans/completed/2026-07-01-tenant-scoped-authority-model.md`) re-derives
+authority LIVE from the database for any ASYNC job drain
+(`internal/auth/service_principal.go` `LoadPrincipal` ->
+`canAccessTenant`/`isSuperadminUser`) - it does not trust the JWT claims that
+enqueued the job at all. A purely claims-forged actor with no real DB row
+would dead-letter with `user is not a member of tenant` the first time a test
+triggers an async job (creating a second tenant is the common case -
+`tenant.__create` schedules an auto-seed job). `env.NewCtx`'s default context
+(standing in the bootstrapped "test" tenant) is this same real actor, so it
+passes both synchronous AND async-drain authority checks out of the box.
+
+Writing an `access: superadmin` platform entity directly (`user`, `tenant` -
+see declarion-core's `checkEntityAccess` / `EntityAccessSuperadmin`) is a
+narrower, separate requirement: the caller's ACTIVE TenantID claim must
+literally be `_global` for that one synchronous request (a claims-only check,
+no DB lookup - unaffected by having a real DB-backed actor). Use
+`testsdk.WithGlobalTenant()` for that one call, e.g. when a test needs to
+create a SECOND tenant:
+
+```go
+ctx := env.NewCtx(t, testsdk.WithGlobalTenant())
+_, err := ctx.Platform.Data().BulkCreate(ctx.Context, "tenant", map[string]any{...})
+```
+
+Do not invent an ad hoc claim shape for this - `WithGlobalTenant()` mirrors
+declarion-core's own coverage for the same gate
+(`internal/store/dbtest/cross_tenant_write_location_test.go`:
+`TenantID: engine.ZeroTenantID, IsSuperadmin: true`). Everyday test contexts
+(regular entity/action calls) keep using the default `env.NewCtx(t)`.
+
 ## Error handling
 
 Return `*runtime.AppError` for structured JSON-RPC errors:

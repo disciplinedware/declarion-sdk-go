@@ -263,15 +263,19 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 
 	url := fmt.Sprintf("http://%s:%s", declarionHost, declarionPort.Port())
 
-	// Bootstrap: create the system tenant + owner user via SQL.
-	// This is the same pattern as the platform's initial setup - the first
-	// tenant must exist before any API call can succeed (auth requires tenant_id).
-	if err := bootstrapTenant(ctx, pgContainer, net); err != nil {
+	// Bootstrap: create the system tenant + a real, DB-backed platform-operator
+	// test actor via SQL. The first tenant must exist before any API call can
+	// succeed (auth requires tenant_id); the actor needs REAL `_global`
+	// ownership + the `platform_admin` role (not just a forged JWT claim)
+	// because declarion-core's tenant-scoped authority model re-derives
+	// authority live from the DB for async job drain - see
+	// bootstrapTestPlatformActor's doc comment.
+	if err := bootstrapTestPlatformActor(ctx, pgContainer, net); err != nil {
 		_ = declarionContainer.Terminate(ctx)
 		_ = pgContainer.Terminate(ctx)
 		_ = net.Remove(ctx)
 		cleanupModuleBundle()
-		return nil, fmt.Errorf("bootstrap tenant: %w", err)
+		return nil, fmt.Errorf("bootstrap test platform actor: %w", err)
 	}
 
 	cfg.logger.Info("platform started", zap.String("url", url))
@@ -301,6 +305,12 @@ const (
 	systemTenantCode = "test"
 	systemUserID     = "00000000-0000-0000-0000-000000000002"
 
+	// globalTenantID/globalTenantCode are the platform's `_global` sentinel
+	// tenant (declarion-core internal/auth.GlobalTenantUUID). Entity write
+	// floors gated `access: superadmin` require the caller to stand here.
+	globalTenantID   = "00000000-0000-0000-0000-000000000000"
+	globalTenantCode = "_global"
+
 	containerCleanupTimeout = 30 * time.Second
 )
 
@@ -312,16 +322,76 @@ func runCleanupStep(logger *zap.Logger, label string, fn func(context.Context) e
 	}
 }
 
-// bootstrapTenant creates the initial tenant + owner user in the DB via psql.
-func bootstrapTenant(ctx context.Context, pgContainer *postgres.PostgresContainer, net *testcontainers.DockerNetwork) error {
+// platformOperatorUserID/Email/DisplayName identify the SDK's synthetic
+// platform-operator test actor - a REAL, DB-backed user, not merely a forged
+// JWT claim. It reuses systemUserID so existing consumer code that references
+// that fixed UUID (e.g. via testsdk.WithGlobalTenant) keeps working.
+const (
+	platformOperatorEmail       = "testsdk-platform-operator@declarion.local"
+	platformOperatorDisplayName = "TestSDK Platform Operator"
+)
+
+// bootstrapTestPlatformActor creates, via raw SQL against the test Postgres
+// container, the initial "test" tenant AND a real platform-operator test
+// actor: a `users` row, `_global` tenant ownership, the `platform_admin`
+// role, and its `user_roles` grant.
+//
+// Why the actor must be REAL, not just a forged JWT claim: declarion-core's
+// tenant-scoped authority model (v0.29.0+) re-derives authority LIVE from the
+// database for any async job drain (internal/auth/service_principal.go
+// LoadPrincipal -> canAccessTenant/isSuperadminUser), ignoring the JWT claims
+// that minted the enqueuing request entirely. A consumer test that creates a
+// second tenant (which schedules an auto-seed job) or otherwise triggers an
+// async handler as this actor would dead-letter with "user is not a member
+// of tenant" if the actor has no real DB-backed `_global` ownership. This
+// mirrors declarion-core's own real implementation of platform-operator
+// identity (internal/auth/platform_operator.go grantPlatformOperatorTx and
+// migration 097_superadmin_global_backfill.up.sql) exactly - same table
+// shapes, same constraint names, same `platform_admin` / `["*"]` role - so it
+// stays correct as core's schema evolves under normal migration discipline.
+//
+// This runs AFTER core's own migrator + seeder one-shot containers (so the
+// `_global` tenant and the `platform_admin` role already exist per migration
+// 097's unconditional backfill) and after the API container is confirmed
+// healthy - the same point the pre-existing tenant-only bootstrap already
+// ran at, before any test code executes. Raw SQL bypasses the API's own
+// entity-write validation/audit, which is an accepted fixture-boundary
+// trade-off for a one-time, pre-test bootstrap identity with no prior
+// sessions - not a pattern for consumer test code to reach for elsewhere.
+func bootstrapTestPlatformActor(ctx context.Context, pgContainer *postgres.PostgresContainer, net *testcontainers.DockerNetwork) error {
 	sql := fmt.Sprintf(`
+		BEGIN;
+
 		INSERT INTO declarion.tenants (id, code, name)
-		VALUES ('%s', '%s', '{"en":"System Test Tenant"}')
+		VALUES ('%[1]s', '%[2]s', '{"en":"System Test Tenant"}')
 		ON CONFLICT (id) DO NOTHING;
-	`, systemTenantID, systemTenantCode)
+
+		INSERT INTO declarion.users (id, email, display_name, kind, is_active, is_superadmin)
+		VALUES ('%[3]s', '%[4]s', '%[5]s', 'person', true, true)
+		ON CONFLICT (id) DO NOTHING;
+
+		INSERT INTO declarion.tenant_users (tenant_id, user_id, is_tenant_owner, created_by)
+		VALUES ('%[6]s', '%[3]s', true, '%[3]s')
+		ON CONFLICT ON CONSTRAINT tenant_user_unique
+		DO UPDATE SET is_tenant_owner = true;
+
+		INSERT INTO declarion.roles (tenant_id, code, name, permissions, created_by)
+		VALUES ('%[6]s', 'platform_admin', 'Platform Admin', '["*"]'::jsonb, '%[3]s')
+		ON CONFLICT ON CONSTRAINT roles_tenant_code_unique
+		DO UPDATE SET code = EXCLUDED.code;
+
+		INSERT INTO declarion.user_roles (tenant_user_id, role_id)
+		SELECT tu.id, r.id
+		FROM declarion.tenant_users tu, declarion.roles r
+		WHERE tu.user_id = '%[3]s' AND tu.tenant_id = '%[6]s'
+		  AND r.tenant_id = '%[6]s' AND r.code = 'platform_admin'
+		ON CONFLICT ON CONSTRAINT user_role_unique DO NOTHING;
+
+		COMMIT;
+	`, systemTenantID, systemTenantCode, systemUserID, platformOperatorEmail, platformOperatorDisplayName, globalTenantID)
 
 	exitCode, output, err := pgContainer.Exec(ctx, []string{
-		"psql", "-U", "declarion", "-d", "declarion", "-c", sql,
+		"psql", "-U", "declarion", "-d", "declarion", "-v", "ON_ERROR_STOP=1", "-c", sql,
 	})
 	if err != nil {
 		return fmt.Errorf("exec psql: %w", err)

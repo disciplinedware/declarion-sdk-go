@@ -4,7 +4,32 @@ All notable changes to `declarion-sdk-go` will be documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [v0.14.0] - 2026-07-02
+
+### Added
+
+- **`testsdk.WithGlobalTenant`.** Mints the test context standing in the `_global`
+  sentinel tenant instead of the bootstrapped system tenant. Required for writes
+  to `access: superadmin` platform entities (`user`, `tenant`) since
+  declarion-core's tenant-scoped authority model gates those on standing in
+  `_global`, not merely an `IsSuperadmin` claim.
+
+### Fixed
+
+- `testsdk.NewCtx`'s `WithTenant` previously changed only the JWT's tenant CODE
+  claim; the tenant ID claim (and the returned `ctx.TenantID`) stayed hardcoded
+  to the system test tenant regardless. `NewCtx` now honors the resolved tenant
+  ID consistently, which `WithGlobalTenant` depends on.
+- **`StartPlatform`'s bootstrap actor is now a real, DB-backed platform
+  operator**, not merely a forged JWT claim. `bootstrapTenant` (tenant-row-only)
+  is replaced by `bootstrapTestPlatformActor`, which additionally creates the
+  `users` row, real `_global` tenant ownership, and the `platform_admin` role -
+  mirroring declarion-core's own `internal/auth/platform_operator.go`
+  `grantPlatformOperatorTx` exactly. Needed because the tenant-scoped authority
+  model re-derives authority LIVE from the database for async job drain and
+  does not trust the enqueuing request's JWT claims; a forged-only actor
+  dead-lettered with "user is not a member of tenant" the first time a test
+  triggered an async job (e.g. `tenant.__create`'s auto-seed).
 
 ## [v0.13.1] - 2026-06-26
 

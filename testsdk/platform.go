@@ -23,13 +23,9 @@ import (
 	"github.com/disciplinedware/declarion-sdk-go/runtime"
 )
 
-const (
-	// defaultOwnerUser is the test owner user name (not a secret).
-	defaultOwnerUser = "testsdk-owner"
-	// secretPrimaryKeyID is the key id used in the generated
-	// DECLARION_SECRET_KEYS (see randomSecretKeys).
-	secretPrimaryKeyID = "v1"
-)
+// secretPrimaryKeyID is the key id used in the generated
+// DECLARION_SECRET_KEYS (see randomSecretKeys).
+const secretPrimaryKeyID = "v1"
 
 // PlatformEnv holds a running Declarion platform for integration tests.
 // Created once in TestMain, shared across all tests in the package.
@@ -181,11 +177,14 @@ func (e *PlatformEnv) Stop() {
 type CtxOption func(*ctxConfig)
 
 type ctxConfig struct {
-	tenantCode string
-	userID     string
+	tenantID     string
+	tenantCode   string
+	userID       string
+	isGlobalUser bool
 }
 
-// WithTenant sets the test tenant code.
+// WithTenant sets the test tenant code. The tenant ID stays the bootstrapped
+// system tenant's; use WithGlobalTenant to actually stand in `_global`.
 func WithTenant(code string) CtxOption {
 	return func(c *ctxConfig) { c.tenantCode = code }
 }
@@ -195,12 +194,27 @@ func WithUser(id string) CtxOption {
 	return func(c *ctxConfig) { c.userID = id }
 }
 
+// WithGlobalTenant mints the context standing in the `_global` tenant
+// (tenant ID = the all-zeros sentinel) instead of the bootstrapped system
+// tenant. Required for writes to `access: superadmin` entities (e.g. `user`,
+// `tenant`) since core's tenant-scoped authority model gates those on
+// STANDING in `_global`, not merely an IsSuperadmin claim (declarion-core
+// docs/authority-model.md; plan 2026-07-01 Task 11).
+func WithGlobalTenant() CtxOption {
+	return func(c *ctxConfig) {
+		c.tenantID = globalTenantID
+		c.tenantCode = globalTenantCode
+		c.isGlobalUser = true
+	}
+}
+
 // NewCtx creates a handler context for a test. Uses the bootstrapped system
 // tenant. The returned *runtime.Ctx has a valid continuation token and platform client.
 func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 	t.Helper()
 
 	cfg := &ctxConfig{
+		tenantID:   systemTenantID,
 		tenantCode: systemTenantCode,
 		userID:     systemUserID,
 	}
@@ -208,8 +222,7 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 		o(cfg)
 	}
 
-	// Mint a continuation token using the system tenant.
-	token := e.mintToken(systemTenantID, cfg.tenantCode, cfg.userID)
+	token := e.mintToken(cfg.tenantID, cfg.tenantCode, cfg.userID, cfg.isGlobalUser)
 
 	platClient := platform.New(platform.Config{
 		BaseURL: e.URL,
@@ -220,7 +233,7 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 		Context:    context.Background(),
 		Platform:   platClient,
 		Logger:     zap.NewNop().With(zap.String("test", t.Name()), zap.String("tenant", cfg.tenantCode)),
-		TenantID:   systemTenantID,
+		TenantID:   cfg.tenantID,
 		TenantCode: cfg.tenantCode,
 		UserID:     cfg.userID,
 		AuditOp:    fmt.Sprintf("test-%s", t.Name()),
@@ -238,7 +251,7 @@ func (e *PlatformEnv) SetParam(t *testing.T, ctx *runtime.Ctx, code string, valu
 	t.Logf("SetParam %q=%v (requires WithContainerEnv at startup for env-backed params)", code, value)
 }
 
-func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string) string {
+func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string, isGlobalUser bool) string {
 	now := time.Now()
 	claims := &runtime.HandlerClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -260,6 +273,12 @@ func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string) string {
 		// carries full authority and never fights permissions/role seeds.
 		// Core authorizes handler tokens from these signed claims.
 		IsSuperadmin: true,
+		// IsGlobalUser set only when standing in `_global` (WithGlobalTenant),
+		// matching what a real `_global`-tenant session carries. The
+		// `access: superadmin` entity write floor keys off TenantID alone
+		// (checkEntityAccess/EntityAccessSuperadmin), but other cross-tenant
+		// paths in core's tenant-scoped authority model key off this flag.
+		IsGlobalUser: isGlobalUser,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(e.JWTSecret))
