@@ -61,9 +61,9 @@ func TestParseHandlerToken_wrong_audience(t *testing.T) {
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ID:        "jti",
 		},
-		UserID:    "u1",
-		TenantID:  "t1",
-		Scope:     HandlerTokenScope,
+		UserID:   "u1",
+		TenantID: "t1",
+		Scope:    HandlerTokenScope,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(testSecret))
@@ -83,9 +83,9 @@ func TestParseHandlerToken_wrong_scope(t *testing.T) {
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			ID:        "jti",
 		},
-		UserID:    "u1",
-		TenantID:  "t1",
-		Scope:     "api", // wrong scope
+		UserID:   "u1",
+		TenantID: "t1",
+		Scope:    "api", // wrong scope
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString([]byte(testSecret))

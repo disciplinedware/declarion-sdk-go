@@ -31,7 +31,7 @@ type FetchResult struct {
     Activities []map[string]any `json:"activities"`
 }
 
-func handleFetch(ctx *sdk.Ctx, p FetchParams) (FetchResult, error) {
+func handleFetch(ctx *sdk.HandlerCtx, p FetchParams) (FetchResult, error) {
     ctx.Logger.Info("fetching from external API", "list_id", p.ListID)
 
     // ... fetch and map data ...
@@ -53,7 +53,7 @@ type LoadResult struct {
     ActivitiesUpserted int `json:"activities_upserted"`
 }
 
-func handleLoad(ctx *sdk.Ctx, p LoadParams) (LoadResult, error) {
+func handleLoad(ctx *sdk.HandlerCtx, p LoadParams) (LoadResult, error) {
     // Upsert via platform callbacks (auto-attaches auth + trace headers).
     companies, err := ctx.Platform.Data().BulkUpsert(ctx.Context, "company", "id", p.PreviousResult.Companies)
     if err != nil {
@@ -133,28 +133,29 @@ actions:
 
 ## Code generation
 
-The hand-written YAML block above is the rich-metadata layer (params/result
-schemas, action UI overrides). Everything else — handler dispatch shape, async
-flag, timeout, idempotent, invoke, audit, the action wrapper — flows directly
-from your `sdk.RegisterFunction` calls and is emitted to a separate YAML by a
-small generator binary you ship in your project.
+The hand-written YAML block above is the authority for product and dispatch
+configuration: actions, display, permissions, async, timeout, idempotency,
+invoke mode, audit, webhook security, and result schema. The SDK generator is
+intentionally thin. It emits only the JSON-RPC handler stub - handler code,
+`type: jsonrpc`, `${param.handlers_url}/rpc`, and params reflected from the Go
+input struct.
 
 The pattern is identical across every derivative project:
 
 1. Copy `examples/gen-functions-yaml/main.go` from this SDK into your project at
    `cmd/gen-functions-yaml/main.go`. Edit only the blank-import block — point
    it at your project's aggregator package (the one whose `init()` chain calls
-   `sdk.RegisterFunction` for every handler, action, and UDF).
+   `sdk.RegisterHandler` for every handler, action, and UDF).
 2. Copy `examples/Makefile.snippet` verbatim into your Makefile. Same target
    names, same output path, same atomic-write pattern across every project.
 3. Run `make gen-functions-yaml`. The generator emits
    `declarion/schema/_functions.generated.yaml`. The underscore prefix forces
-   lex-first load order so your manual `actions.yaml` overlay (rich metadata,
-   operator overrides) wins via declarion-core's merge-on-duplicate policy.
+   lex-first load order so your manual schema overlay wins via
+   declarion-core's merge-on-duplicate policy.
 4. Wire `make verify-functions-yaml` into CI next to `go test` as a drift
    guard.
 
-The generator binary itself is a literal one-liner — `sdk.RunGenerator()`. All
+The generator binary itself is a literal one-liner — `sdk.Generate()`. All
 logic lives in the SDK; the per-project file contributes only the
 blank-import manifest, which has to be there (Go can't import upward from SDK
 into consumer code).
@@ -171,6 +172,7 @@ into consumer code).
 - Structured logging via `ctx.Logger` (`go.uber.org/zap`, pre-tagged with handler/tenant/user/audit_op)
 - SIGTERM graceful shutdown
 - `/health` endpoint for readiness probes
+- Reserved JSON-RPC metadata extraction: `_entity_code` and `_object_ids` are removed from typed params and exposed on `ctx.EntityCode` / `ctx.ObjectIDs`
 
 ## Integration tests
 

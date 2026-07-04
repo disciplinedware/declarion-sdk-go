@@ -209,8 +209,8 @@ func WithGlobalTenant() CtxOption {
 }
 
 // NewCtx creates a handler context for a test. Uses the bootstrapped system
-// tenant. The returned *runtime.Ctx has a valid continuation token and platform client.
-func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
+// tenant. The returned *runtime.HandlerCtx has a valid continuation token and platform client.
+func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.HandlerCtx {
 	t.Helper()
 
 	cfg := &ctxConfig{
@@ -229,7 +229,7 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 		Token:   token,
 	})
 
-	ctx := &runtime.Ctx{
+	ctx := &runtime.HandlerCtx{
 		Context:    context.Background(),
 		Platform:   platClient,
 		Logger:     zap.NewNop().With(zap.String("test", t.Name()), zap.String("tenant", cfg.tenantCode)),
@@ -246,7 +246,7 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.Ctx {
 // SetParam is reserved for future per-test param overrides via the platform API.
 // For now, use WithContainerEnv in StartPlatform to set params at container startup.
 // The platform resolves env vars declared in the consumer's parameters YAML.
-func (e *PlatformEnv) SetParam(t *testing.T, ctx *runtime.Ctx, code string, value any) {
+func (e *PlatformEnv) SetParam(t *testing.T, ctx *runtime.HandlerCtx, code string, value any) {
 	t.Helper()
 	t.Logf("SetParam %q=%v (requires WithContainerEnv at startup for env-backed params)", code, value)
 }

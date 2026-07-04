@@ -13,16 +13,19 @@ import (
 // answers "do you have a value for code X?".
 //
 // Behaviour:
+//
 //   - Platform has a value      -> (value, nil).
+//
 //   - Platform reports no value  -> (def, nil). No error.
+//
 //   - Coercion or transport err  -> (zero, AppError{CodeInternal}). The
 //     returned error is already final and code-tagged ("resolve parameter
 //     "X": ..."); callers MUST propagate it as-is (return err) - never
 //     re-wrap with the parameter name, that only duplicates it.
 //
-//	model, err := runtime.GetParam[string](ctx, "parse_model", "gpt-5")
-//	enabled, err := runtime.GetParam[bool](ctx, "feature_flag", false)
-func GetParam[T any](ctx *Ctx, code string, def T) (T, error) {
+//     model, err := runtime.GetParam[string](ctx, "parse_model", "gpt-5")
+//     enabled, err := runtime.GetParam[bool](ctx, "feature_flag", false)
+func GetParam[T any](ctx *HandlerCtx, code string, def T) (T, error) {
 	v, err := platform.GetParam[T](ctx.Platform.Params(), ctx.Context, code, def)
 	if err != nil {
 		var zero T
@@ -42,7 +45,7 @@ func GetParam[T any](ctx *Ctx, code string, def T) (T, error) {
 //
 //	token, err := runtime.GetRequiredParam[string](ctx, "clickup_api_token")
 //	if err != nil { return Result{}, err }
-func GetRequiredParam[T any](ctx *Ctx, code string) (T, error) {
+func GetRequiredParam[T any](ctx *HandlerCtx, code string) (T, error) {
 	var zero T
 	value, found, _, err := ctx.Platform.Params().Lookup(ctx.Context, code)
 	if err != nil {

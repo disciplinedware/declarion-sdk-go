@@ -12,9 +12,9 @@ import (
 // state. Language-agnostic in spirit: any SDK that implements the three
 // handlers below can pass the conformance suite.
 func RegisterConformanceSidecarHandlers() {
-	runtime.RegisterFunction[echoParams, echoResult]("conformance.echo", handleEcho)
-	runtime.RegisterFunction[errorParams, any]("conformance.error", handleError)
-	runtime.RegisterFunction[callbackParams, callbackResult]("conformance.callback", handleCallback)
+	runtime.RegisterHandler[echoParams, echoResult]("conformance.echo", handleEcho)
+	runtime.RegisterHandler[errorParams, any]("conformance.error", handleError)
+	runtime.RegisterHandler[callbackParams, callbackResult]("conformance.callback", handleCallback)
 }
 
 // --- Handler implementations ---
@@ -30,7 +30,7 @@ type echoResult struct {
 	UserID     string `json:"user_id"`
 }
 
-func handleEcho(ctx *runtime.Ctx, p echoParams) (echoResult, error) {
+func handleEcho(ctx *runtime.HandlerCtx, p echoParams) (echoResult, error) {
 	return echoResult{
 		Message:    fmt.Sprintf("hello %s", p.Name),
 		TenantID:   ctx.TenantID,
@@ -41,7 +41,7 @@ func handleEcho(ctx *runtime.Ctx, p echoParams) (echoResult, error) {
 
 type errorParams struct{}
 
-func handleError(ctx *runtime.Ctx, _ errorParams) (any, error) {
+func handleError(ctx *runtime.HandlerCtx, _ errorParams) (any, error) {
 	return nil, &runtime.AppError{
 		Code:          runtime.JSONRPCAppError,
 		Message:       "conformance test error",
@@ -58,7 +58,7 @@ type callbackResult struct {
 	CallbackStatus int `json:"callback_status"`
 }
 
-func handleCallback(ctx *runtime.Ctx, p callbackParams) (callbackResult, error) {
+func handleCallback(ctx *runtime.HandlerCtx, p callbackParams) (callbackResult, error) {
 	if p.CallbackURL == "" {
 		return callbackResult{}, &runtime.AppError{
 			Code:          runtime.JSONRPCInvalidParams,

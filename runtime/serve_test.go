@@ -42,7 +42,7 @@ func mintTestToken(t *testing.T, tenantID, userID, action, auditOp string) strin
 
 // setupTestServer prepares an in-process JSON-RPC server backed by the
 // package-level handler registry. Tests register their handlers via
-// RegisterFunction BEFORE calling this. ClearHandlerRegistry runs on
+// RegisterHandler BEFORE calling this. ClearHandlerRegistry runs on
 // cleanup so neighbouring tests stay isolated.
 func setupTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -60,15 +60,9 @@ func setupTestServerWithConfig(t *testing.T, cfg *Config) *httptest.Server {
 func startInProcessServer(t *testing.T, cfg *Config) *httptest.Server {
 	t.Helper()
 	t.Cleanup(ClearHandlerRegistry)
-	registryMu.RLock()
-	registry := make(map[string]registration, len(handlerRegistry))
-	for _, reg := range handlerRegistry {
-		registry[reg.method] = reg
-	}
-	registryMu.RUnlock()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
-		handleRPC(w, r, registry, cfg)
+		handleRPC(w, r, cfg)
 	})
 	return httptest.NewServer(mux)
 }
@@ -83,9 +77,9 @@ type echoResult struct {
 
 func TestHandleRPC_success(t *testing.T) {
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "hello " + p.Name}, nil
-	}, NoAction())
+	})
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -173,14 +167,14 @@ func TestHandleRPC_protocol_version_mismatch(t *testing.T) {
 
 func TestHandleRPC_handler_error(t *testing.T) {
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.fail", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.fail", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		return echoResult{}, &AppError{
 			Code:          JSONRPCAppError,
 			Message:       "ClickUp API 429",
 			DeclarionCode: CodeExternalService,
 			Retryable:     true,
 		}
-	}, NoAction())
+	})
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -203,9 +197,9 @@ func TestHandleRPC_invalid_params(t *testing.T) {
 		Count int `json:"count"`
 	}
 	ClearHandlerRegistry()
-	RegisterFunction[strictParams, echoResult]("test.strict", func(ctx *Ctx, p strictParams) (echoResult, error) {
+	RegisterHandler[strictParams, echoResult]("test.strict", func(ctx *HandlerCtx, p strictParams) (echoResult, error) {
 		return echoResult{Message: "ok"}, nil
-	}, NoAction())
+	})
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -223,9 +217,9 @@ func TestHandleRPC_invalid_params(t *testing.T) {
 
 func TestHandleRPC_invalid_token(t *testing.T) {
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "ok"}, nil
-	}, NoAction())
+	})
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -247,17 +241,17 @@ func TestHandleRPC_invalid_token(t *testing.T) {
 }
 
 func TestHandleRPC_context_propagation(t *testing.T) {
-	var capturedCtx *Ctx
+	var capturedCtx *HandlerCtx
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.ctx", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.ctx", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		capturedCtx = ctx
 		return echoResult{Message: "ok"}, nil
-	}, NoAction())
+	})
 	srv := setupTestServer(t)
 	defer srv.Close()
 
 	token := mintTestToken(t, "tenant-42", "user-99", "test.ctx", "audit-op-123")
-	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.ctx","params":{"name":"test"}}`
+	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.ctx","params":{"name":"test","_entity_code":"lead","_object_ids":["lead-1","lead-2"]}}`
 	req, err := http.NewRequest("POST", srv.URL+"/rpc", strings.NewReader(body))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -275,18 +269,20 @@ func TestHandleRPC_context_propagation(t *testing.T) {
 	assert.Equal(t, "user-99", capturedCtx.UserID)
 	assert.Equal(t, "audit-op-123", capturedCtx.AuditOp)
 	assert.Equal(t, "test.ctx", capturedCtx.Action)
+	assert.Equal(t, "lead", capturedCtx.EntityCode)
+	assert.Equal(t, []string{"lead-1", "lead-2"}, capturedCtx.ObjectIDs)
 	assert.Equal(t, "declarion.tenant_id=tenant-42", capturedCtx.Baggage)
 	assert.NotNil(t, capturedCtx.Platform)
 	assert.NotNil(t, capturedCtx.Logger)
 }
 
 func TestHandleRPC_no_token_allowed(t *testing.T) {
-	var capturedCtx *Ctx
+	var capturedCtx *HandlerCtx
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.open", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.open", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		capturedCtx = ctx
 		return echoResult{Message: "ok"}, nil
-	}, NoAction())
+	})
 	srv := setupTestServer(t)
 	defer srv.Close()
 
@@ -306,9 +302,9 @@ func TestHandleRPC_require_token_rejects_unauthenticated(t *testing.T) {
 		RequireToken: true,
 	}
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "ok"}, nil
-	}, NoAction())
+	})
 	srv := setupTestServerWithConfig(t, cfg)
 	defer srv.Close()
 
@@ -330,9 +326,9 @@ func TestHandleRPC_require_token_allows_authenticated(t *testing.T) {
 		RequireToken: true,
 	}
 	ClearHandlerRegistry()
-	RegisterFunction[echoParams, echoResult]("test.echo", func(ctx *Ctx, p echoParams) (echoResult, error) {
+	RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "hello " + p.Name}, nil
-	}, NoAction())
+	})
 	srv := setupTestServerWithConfig(t, cfg)
 	defer srv.Close()
 

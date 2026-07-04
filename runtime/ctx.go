@@ -8,9 +8,9 @@ import (
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
 
-// Ctx is the handler execution context. Provides access to the platform client,
-// logger, and identity claims extracted from the continuation token.
-type Ctx struct {
+// HandlerCtx is the handler execution context. Provides access to the platform
+// client, logger, identity claims, and invocation metadata.
+type HandlerCtx struct {
 	// Context is the underlying Go context with cancellation/deadline.
 	Context context.Context
 
@@ -35,34 +35,24 @@ type Ctx struct {
 	Permissions []string
 
 	// Authority dimensions baked into the continuation token at mint.
-	// Sidecar handlers enforce authority gates via these booleans
-	// (cross-tenant decisions, owner-reserved actions, etc.) without
-	// re-querying the DB. Mirrors the platform's engine.HandlerCtx.
+	// Mirrors the platform's engine.HandlerCtx.
 	IsSuperadmin  bool
 	IsTenantOwner bool
 	IsGlobalUser  bool
 
+	// EntityCode is the entity context the platform invoked this handler with.
+	// Populated from the reserved `_entity_code` JSON-RPC param.
+	EntityCode string
+
 	// ObjectIDs is the entity-row ids the platform invoked this handler with.
-	// Populated from the reserved `_object_ids` field in the JSON-RPC params
-	// envelope (extracted by the SDK before the handler's typed params are
-	// unmarshalled, so handlers see only their declared params plus this
-	// dedicated field).
-	//
-	// Length:
-	//   invoke: array (handler default)  → 0..N (whatever caller passed)
-	//   invoke: each                     → exactly 1 (platform fans out)
-	//   invoke: unbound                  → 0 (handler ignores ids)
+	// Populated from the reserved `_object_ids` JSON-RPC param.
 	ObjectIDs []string
 
 	// Baggage is the W3C baggage header value propagated from the platform.
 	Baggage string
 
 	// RawBody carries the exact bytes of the HTTP request body, captured
-	// before JSON unmarshalling, when the handler was registered with
-	// runtime.RawBodyAccess(). Empty for handlers that did not opt in.
-	//
-	// Use for HMAC / signature verification of webhook payloads where the
-	// hash must be computed over the wire bytes (any normalization through
-	// JSON round-trip would corrupt the hash).
+	// before JSON unmarshalling, when the handler was registered with raw-body
+	// support. Empty for handlers that did not opt in.
 	RawBody []byte
 }

@@ -16,6 +16,7 @@ import (
 
 	"go.uber.org/zap"
 
+	kern "github.com/disciplinedware/declarion-sdk-go/dispatch"
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
 
@@ -95,11 +96,11 @@ func (c *Config) withDefaults() {
 }
 
 // Serve starts the JSON-RPC sidecar server using every function registered
-// via RegisterFunction. Walks the same package-level handlerRegistry that
+// via RegisterHandler. Walks the same package-level handlerRegistry that
 // GenerateFunctionsYAML consumes — single source of truth for both the
 // runtime dispatch table and the YAML manifest. Callers register functions
 // in init() of their handler packages (typically through a project-specific
-// wrapper that delegates to RegisterFunction). Blocks until SIGTERM/SIGINT,
+// wrapper that delegates to RegisterHandler). Blocks until SIGTERM/SIGINT,
 // then gracefully shuts down.
 func Serve(cfg Config) error {
 	cfg.withDefaults()
@@ -122,24 +123,11 @@ func Serve(cfg Config) error {
 		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
 	}
 
-	// Walk the package-level handlerRegistry — same registry that
-	// GenerateFunctionsYAML consumes. RegisterFunction is the only write
-	// path; duplicate detection already fires at the registration site, so
-	// this loop is defensive only.
-	registryMu.RLock()
-	registry := make(map[string]registration, len(handlerRegistry))
-	for _, r := range handlerRegistry {
-		if _, exists := registry[r.method]; exists {
-			registryMu.RUnlock()
-			return fmt.Errorf("duplicate handler method: %s", r.method)
-		}
-		registry[r.method] = r
-	}
-	registryMu.RUnlock()
+	registeredCount := registeredHandlerCount()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
-		handleRPC(w, r, registry, &cfg)
+		handleRPC(w, r, &cfg)
 	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -161,7 +149,7 @@ func Serve(cfg Config) error {
 
 	cfg.Logger.Info("sidecar starting",
 		zap.String("addr", cfg.Addr),
-		zap.Int("handlers", len(registry)),
+		zap.Int("handlers", registeredCount),
 	)
 
 	// Graceful shutdown on SIGTERM/SIGINT.
@@ -195,7 +183,7 @@ func Serve(cfg Config) error {
 	return nil
 }
 
-func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]registration, cfg *Config) {
+func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Read and parse the request body FIRST so we have req.ID for error responses.
@@ -233,14 +221,6 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]regis
 
 	if req.JSONRPC != "2.0" {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidRequest, "jsonrpc must be 2.0", "", false))
-		return
-	}
-
-	// Find handler.
-	reg, ok := registry[req.Method]
-	if !ok {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCMethodNotFound,
-			fmt.Sprintf("method %q not found", req.Method), "", false))
 		return
 	}
 
@@ -291,17 +271,17 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]regis
 
 	// Extract reserved `_object_ids` from JSON-RPC params before the handler's
 	// typed params are unmarshalled. Reserved keys (underscore prefix) are
-	// platform-injected metadata; handlers see them via dedicated Ctx fields,
+	// platform-injected metadata; handlers see them via dedicated HandlerCtx fields,
 	// not as part of their declared params surface.
-	objectIDs, paramsWithoutReserved, err := extractObjectIDs(req.Params)
+	entityCode, objectIDs, paramsWithoutReserved, err := extractReservedParams(req.Params)
 	if err != nil {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			fmt.Sprintf("invalid _object_ids: %s", err), CodeValidation, false))
+			err.Error(), CodeValidation, false))
 		return
 	}
 
 	// Build handler context.
-	hctx := &Ctx{
+	hctx := &HandlerCtx{
 		Context:  r.Context(),
 		Platform: platClient,
 		Logger: cfg.Logger.With(
@@ -319,22 +299,15 @@ func handleRPC(w http.ResponseWriter, r *http.Request, registry map[string]regis
 		IsSuperadmin:  isSuperadmin,
 		IsTenantOwner: isTenantOwner,
 		IsGlobalUser:  isGlobalUser,
+		EntityCode:    entityCode,
 		ObjectIDs:     objectIDs,
 		Baggage:       baggage,
 	}
 
 	// Dispatch with params stripped of reserved keys.
-	result, err := reg.dispatch(hctx, paramsWithoutReserved)
+	result, err := executeRegisteredHandler(req.Method, hctx, paramsWithoutReserved)
 	if err != nil {
-		var appErr *AppError
-		if errors.As(err, &appErr) {
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, appErr.Code,
-				appErr.Message, appErr.DeclarionCode, appErr.Retryable))
-		} else {
-			cfg.Logger.Error("handler error", zap.String("method", req.Method), zap.Error(err))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInternalError,
-				err.Error(), CodeInternal, false))
-		}
+		writeHandlerError(w, req.ID, req.Method, err, cfg)
 		return
 	}
 
@@ -353,32 +326,57 @@ func extractBearer(auth string) string {
 	return ""
 }
 
-// extractObjectIDs pulls the reserved `_object_ids` field from JSON-RPC params
-// and returns it plus the params with that key removed. Returns (nil, raw, nil)
-// when the field is absent (handler called without entity ids — fine for
-// invoke=unbound). Errors only on type mismatch.
-func extractObjectIDs(raw json.RawMessage) ([]string, json.RawMessage, error) {
+func writeHandlerError(w http.ResponseWriter, id, method string, err error, cfg *Config) {
+	var appErr *AppError
+	if errors.As(err, &appErr) {
+		writeJSON(w, http.StatusOK, NewErrorResponse(id, appErr.Code,
+			appErr.Message, appErr.DeclarionCode, appErr.Retryable))
+		return
+	}
+	var decodeErr *kern.DecodeError
+	if errors.As(err, &decodeErr) {
+		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInvalidParams,
+			err.Error(), CodeValidation, false))
+		return
+	}
+	if errors.Is(err, kern.ErrNotFound) {
+		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCMethodNotFound,
+			fmt.Sprintf("method %q not found", method), "", false))
+		return
+	}
+	cfg.Logger.Error("handler error", zap.String("method", method), zap.Error(err))
+	writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInternalError,
+		err.Error(), CodeInternal, false))
+}
+
+// extractReservedParams pulls platform-reserved metadata from JSON-RPC params
+// and returns it plus the params with those keys removed. Non-object params pass
+// through untouched.
+func extractReservedParams(raw json.RawMessage) (string, []string, json.RawMessage, error) {
 	if len(raw) == 0 {
-		return nil, raw, nil
+		return "", nil, raw, nil
 	}
 	var bag map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &bag); err != nil {
-		// Not an object — pass through untouched (handler with positional/array
-		// params, or empty body). No object_ids to extract.
-		return nil, raw, nil
+		return "", nil, raw, nil
 	}
-	idsRaw, ok := bag["_object_ids"]
-	if !ok {
-		return nil, raw, nil
+	var entityCode string
+	if entityRaw, ok := bag["_entity_code"]; ok {
+		delete(bag, "_entity_code")
+		if err := json.Unmarshal(entityRaw, &entityCode); err != nil {
+			return "", nil, raw, fmt.Errorf("invalid _entity_code: expected string: %w", err)
+		}
 	}
-	delete(bag, "_object_ids")
 	var ids []string
-	if err := json.Unmarshal(idsRaw, &ids); err != nil {
-		return nil, raw, fmt.Errorf("expected string array: %w", err)
+	if idsRaw, ok := bag["_object_ids"]; ok {
+		delete(bag, "_object_ids")
+		if err := json.Unmarshal(idsRaw, &ids); err != nil {
+			return "", nil, raw, fmt.Errorf("invalid _object_ids: expected string array: %w", err)
+		}
 	}
 	cleaned, err := json.Marshal(bag)
 	if err != nil {
-		return nil, raw, fmt.Errorf("re-marshal params: %w", err)
+		return "", nil, raw, fmt.Errorf("re-marshal params: %w", err)
 	}
-	return ids, cleaned, nil
+	return entityCode, ids, cleaned, nil
 }

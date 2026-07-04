@@ -14,10 +14,10 @@ type Request struct {
 
 // Response is a JSON-RPC 2.0 response envelope.
 type Response struct {
-	JSONRPC string      `json:"jsonrpc"`
-	ID      string      `json:"id"`
-	Result  any         `json:"result,omitempty"`
-	Error   *ErrorObj   `json:"error,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      string    `json:"id"`
+	Result  any       `json:"result,omitempty"`
+	Error   *ErrorObj `json:"error,omitempty"`
 }
 
 // ErrorObj is a JSON-RPC 2.0 error object.

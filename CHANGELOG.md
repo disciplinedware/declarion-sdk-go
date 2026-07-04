@@ -4,6 +4,25 @@ All notable changes to `declarion-sdk-go` will be documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `handlerparam` provides the shared minimal handler parameter declaration and reflection used by the SDK generator and declarion-core.
+- `dispatch` provides the SDK-side typed handler registry and `Execute` kernel.
+- `runtime.HandlerCtx.EntityCode` exposes the platform-provided `_entity_code` metadata beside `ObjectIDs`.
+
+### Changed
+
+- **BREAKING.** `runtime.RegisterFunction[P, R](method, fn, opts...)` is replaced by `runtime.RegisterHandler[P, R](code, fn)`. Registration no longer accepts options; actions, display, permissions, timeout, retry, webhook security, and other configuration live in YAML.
+- **BREAKING.** `runtime.Ctx` is renamed to `runtime.HandlerCtx`.
+- **BREAKING.** `runtime.RunGenerator()` is renamed to `runtime.Generate()`.
+- The generator now emits only thin JSON-RPC handler stubs: handler code, `type: jsonrpc`, URL, and reflected params. It no longer emits `actions:` or rich handler metadata.
+
+### Removed
+
+- Removed the SDK mirror of core handler/action metadata: `HandlerMetadata`, `ActionMetadata`, `RetryConfig`, and all registration option constructors.
+
 ## [v0.14.0] - 2026-07-02
 
 ### Added
