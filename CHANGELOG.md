@@ -4,7 +4,7 @@ All notable changes to `declarion-sdk-go` will be documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
-## Unreleased
+## [v0.15.0] - 2026-07-05
 
 ### Added
 
