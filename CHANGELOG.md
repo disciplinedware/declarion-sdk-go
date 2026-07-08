@@ -4,6 +4,12 @@ All notable changes to `declarion-sdk-go` will be documented here.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `testsdk.PlatformEnv.DBPool(t)` exposes a test-only pgx pool for assertions against the database migrated by `StartPlatform`.
+
 ## [v0.15.0] - 2026-07-05
 
 ### Added
@@ -11,7 +17,6 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - `handlerparam` provides the shared minimal handler parameter declaration and reflection used by the SDK generator and declarion-core.
 - `dispatch` provides the SDK-side typed handler registry and `Execute` kernel.
 - `runtime.HandlerCtx.EntityCode` exposes the platform-provided `_entity_code` metadata beside `ObjectIDs`.
-- `testsdk.PlatformEnv.DBPool(t)` exposes a test-only pgx pool for assertions against the database migrated by `StartPlatform`.
 
 ### Changed
 
