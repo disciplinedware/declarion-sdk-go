@@ -262,6 +262,23 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	}
 
 	url := fmt.Sprintf("http://%s:%s", declarionHost, declarionPort.Port())
+	pgHost, err := pgContainer.Host(ctx)
+	if err != nil {
+		_ = declarionContainer.Terminate(ctx)
+		cleanupModuleBundle()
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		return nil, fmt.Errorf("get postgres host: %w", err)
+	}
+	pgPort, err := pgContainer.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		_ = declarionContainer.Terminate(ctx)
+		cleanupModuleBundle()
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		return nil, fmt.Errorf("get postgres port: %w", err)
+	}
+	hostDBURL := fmt.Sprintf("postgres://declarion:declarion@%s:%s/declarion?sslmode=disable", pgHost, pgPort.Port())
 
 	// Bootstrap: create the system tenant + a real, DB-backed platform-operator
 	// test actor via SQL. The first tenant must exist before any API call can
@@ -283,6 +300,7 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	env := &PlatformEnv{
 		URL:             url,
 		JWTSecret:       cfg.jwtSecret,
+		databaseURL:     hostDBURL,
 		logger:          cfg.logger,
 		serverContainer: declarionContainer,
 		stopFn: func() {

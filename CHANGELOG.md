@@ -11,6 +11,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - `handlerparam` provides the shared minimal handler parameter declaration and reflection used by the SDK generator and declarion-core.
 - `dispatch` provides the SDK-side typed handler registry and `Execute` kernel.
 - `runtime.HandlerCtx.EntityCode` exposes the platform-provided `_entity_code` metadata beside `ObjectIDs`.
+- `testsdk.PlatformEnv.DBPool(t)` exposes a test-only pgx pool for assertions against the database migrated by `StartPlatform`.
 
 ### Changed
 

@@ -229,6 +229,14 @@ declarion-core's own coverage for the same gate
 `TenantID: engine.ZeroTenantID, IsSuperadmin: true`). Everyday test contexts
 (regular entity/action calls) keep using the default `env.NewCtx(t)`.
 
+Tests that need to assert post-migration database invariants can use
+`env.DBPool(t)` to query the same Postgres database that `StartPlatform`
+already migrated. This is for read-mostly test assertions such as
+`information_schema` checks; production code and handler tests should still
+prefer platform APIs. In external mode (`DECLARION_TEST_URL`), set
+`DECLARION_TEST_DATABASE_URL` so `DBPool` knows which database backs the
+external platform.
+
 ## Error handling
 
 Return `*runtime.AppError` for structured JSON-RPC errors:

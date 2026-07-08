@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/disciplinedware/declarion-sdk-go/platform"
@@ -36,6 +37,7 @@ type PlatformEnv struct {
 	// JWTSecret is the shared secret for minting continuation tokens.
 	JWTSecret string
 
+	databaseURL     string
 	stopFn          func()
 	logger          *zap.Logger
 	serverContainer interface {
@@ -56,6 +58,24 @@ func (e *PlatformEnv) ServerLogs() string {
 	defer func() { _ = logs.Close() }()
 	b, _ := io.ReadAll(logs)
 	return string(b)
+}
+
+// DBPool returns a pgx pool connected to the test platform database.
+//
+// In automatic container mode this connects to the Postgres container that
+// StartPlatform already started and migrated. In external mode, set
+// DECLARION_TEST_DATABASE_URL to the database behind DECLARION_TEST_URL.
+func (e *PlatformEnv) DBPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	if e.databaseURL == "" {
+		t.Fatal("testsdk: database URL is unavailable; set DECLARION_TEST_DATABASE_URL when using DECLARION_TEST_URL")
+	}
+	pool, err := pgxpool.New(context.Background(), e.databaseURL)
+	if err != nil {
+		t.Fatalf("testsdk: connect to platform database: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
 }
 
 // Option configures StartPlatform.
@@ -150,10 +170,11 @@ func StartPlatform(opts ...Option) (*PlatformEnv, error) {
 			secret = cfg.jwtSecret
 		}
 		env := &PlatformEnv{
-			URL:       strings.TrimRight(url, "/"),
-			JWTSecret: secret,
-			stopFn:    func() {},
-			logger:    cfg.logger,
+			URL:         strings.TrimRight(url, "/"),
+			JWTSecret:   secret,
+			databaseURL: os.Getenv("DECLARION_TEST_DATABASE_URL"),
+			stopFn:      func() {},
+			logger:      cfg.logger,
 		}
 		if err := env.waitForHealth(10 * time.Second); err != nil {
 			return nil, fmt.Errorf("external platform not healthy: %w", err)
