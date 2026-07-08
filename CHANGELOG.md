@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-07-08
+
 ### Added
 
 - `testsdk.PlatformEnv.DBPool(t)` exposes a test-only pgx pool for assertions against the database migrated by `StartPlatform`.
