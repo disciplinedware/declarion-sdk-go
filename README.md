@@ -173,6 +173,50 @@ into consumer code).
 - SIGTERM graceful shutdown
 - `/health` endpoint for readiness probes
 - Reserved JSON-RPC metadata extraction: `_entity_code` and `_object_ids` are removed from typed params and exposed on `ctx.EntityCode` / `ctx.ObjectIDs`
+- Verifier serving for anonymous provider webhooks: a separate registry and token audience on the same `/rpc` endpoint (see below)
+
+## Verifiers (anonymous provider webhooks)
+
+A provider webhook (Stripe, Telegram, a payment gateway) reaches Declarion with no credential - the provider is not your user and will never hold your token. It can prove who it is (a signature over the body, a secret token it echoes back), but only your application knows how to check that proof.
+
+A **verifier** is that check. You register it like a handler; Declarion calls it over the same `/rpc` endpoint, under a separate, powerless token audience, BEFORE it switches tenant, materializes a user, deduplicates the delivery, opens audit, or dispatches your handler.
+
+```go
+func init() {
+	runtime.RegisterVerifier("acme.stripe", func(c *runtime.VerifierCtx) (runtime.VerifierResult, error) {
+		// c.RawBody is the EXACT bytes (a signature is over bytes, not re-serialized JSON).
+		// c.Header(...) / c.QueryValue(...) expose only what the declaration allowlisted.
+		// c.PathValues holds the named segments of the endpoint's `path`.
+		secret := lookupSecret(c.PathValues["provider"])
+		if secret == "" || !validSignature(c.RawBody, c.Header("Stripe-Signature"), secret) {
+			// Unknown provider and bad signature MUST be indistinguishable - this
+			// response is public and must not become an oracle for what exists.
+			return runtime.VerifierResult{}, runtime.Reject("not authenticated")
+		}
+		return runtime.VerifierResult{
+			// Trusted values merged into the handler's params by name (they beat the
+			// body: a contradicting body field is a 400 before dispatch).
+			Params: map[string]any{"provider_id": id},
+		}, nil
+	})
+}
+```
+
+**Returning identity.** `TargetTenantID` and `UserID` are both optional. Fill only what your code alone can know; Declarion fills the rest from the verifier declaration's `dispatch_tenant` / `dispatch_user`. A fixed-tenant provider (Stripe) returns neither - it never re-implements tenant or user lookup. A verifier whose tenant depends on the payload (which bot received this update) returns the tenant and leaves the user to the declaration.
+
+**Declining.** Return one of three typed outcomes; Declarion maps each to a single uniform public response:
+
+| | Public response | Use for |
+|---|---|---|
+| `runtime.Reject(reason)` | `401` | Any authentication or lookup failure. Keep them indistinguishable. |
+| `runtime.InvalidRequest(reason)` | `400` | Authenticated, but the payload is malformed. |
+| `runtime.Unavailable(format, ...)` | `503` | A platform problem, or a transient state the provider should retry through. |
+
+A plain (non-typed) error is treated as `unavailable`, never as a rejection: your bug must not make the provider drop a delivery permanently. The `reason` is internal telemetry and never reaches the caller.
+
+**`VerifierCtx.Platform`** is non-nil only when the declaration names a `run_as_global_user` - a service user Declarion mints a short-lived credential for, per call, so the verifier can read from the platform (typically to reveal an encrypted secret to compare against). It is NEVER built from the verifier's own call token, which carries no authority at all. That credential is minted *before* authentication succeeds, so keep its grants read/reveal-narrow.
+
+`make gen-functions-yaml` emits the `verifiers:` stub (`type` + `url`) next to your handler stubs; the security-bearing fields (allowlists, dispatch identity, rate limit) are hand-written in your schema. See the platform's `dsl.md §15.16` for the full declaration.
 
 ## Integration tests
 

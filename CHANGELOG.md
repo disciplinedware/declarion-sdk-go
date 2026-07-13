@@ -6,6 +6,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **Verifiers for anonymous provider webhooks.** `runtime.RegisterVerifier` registers application code that authenticates a credential-less provider call (Stripe signature, Telegram secret token) before Declarion admits it. Served on the existing `/rpc` endpoint under its own powerless token audience, with a registry disjoint from handlers. `VerifierCtx` exposes the exact raw body, the named path values, and only the allowlisted headers/query; `VerifierCtx.Platform` is non-nil only when the declaration names a run-as service user, and is never built from the verifier's own call token.
+- `runtime.Reject` / `runtime.InvalidRequest` / `runtime.Unavailable` - the typed verifier outcomes Declarion maps to one uniform public response each (401 / 400 / 503). A plain error is treated as unavailable, never as a rejection.
+- `VerifierResult.TargetTenantID` and `.UserID` are optional: the verifier fills only what it alone can know, and the verifier declaration's `dispatch_tenant` / `dispatch_user` supply the rest. `.Params` carries trusted values that Declarion merges into the handler's params (they beat body fields).
+- Handler tokens now carry a `Method` claim, bound at serve time, so a token minted for one method cannot invoke another.
+
 ## [v0.16.0] - 2026-07-08
 
 ### Added

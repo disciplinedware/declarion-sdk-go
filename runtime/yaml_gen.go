@@ -26,6 +26,38 @@ func GenerateFunctionsYAML(out io.Writer) error {
 			return fmt.Errorf("write handler %s: %w", d.Code, err)
 		}
 	}
+
+	// Verifiers registry: a sibling of handlers, emitted the same way - from
+	// declarations, as type/url stubs. Hand-written overlay YAML adds
+	// run_as_global_user / allowed_headers / allowed_query / config /
+	// timeout_seconds / rate_limit; the generated stub carries only the wire
+	// declaration (verifiers have no typed params - their input is the request
+	// envelope on VerifierCtx).
+	vdecls := registeredVerifierDeclarations()
+	if len(vdecls) > 0 {
+		if _, err := fmt.Fprintln(out, "verifiers:"); err != nil {
+			return fmt.Errorf("write verifiers header: %w", err)
+		}
+		for _, d := range vdecls {
+			if err := writeVerifierYAML(out, d); err != nil {
+				return fmt.Errorf("write verifier %s: %w", d.Code, err)
+			}
+		}
+	}
+	return nil
+}
+
+func writeVerifierYAML(out io.Writer, d kern.Declaration) error {
+	lines := []string{
+		fmt.Sprintf("  %s:", d.Code),
+		"    type: jsonrpc",
+		"    url: ${param.handlers_url}/rpc",
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(out, line); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

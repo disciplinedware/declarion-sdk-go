@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +20,12 @@ import (
 	kern "github.com/disciplinedware/declarion-sdk-go/dispatch"
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
+
+// RunAsTokenHeader carries the optional Core-minted run-as service-user
+// credential for a verifier call. It is separate from the powerless verifier
+// call token in the Authorization header; the verifier's Platform client is
+// built ONLY from this header, never from the call token.
+const RunAsTokenHeader = "X-Declarion-Run-As-Token"
 
 const (
 	// ProtocolVersion is the Declarion wire contract version this SDK supports.
@@ -123,6 +130,14 @@ func Serve(cfg Config) error {
 		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
 	}
 
+	// A deployment that registers any verifier MUST enable signed-token
+	// verification: verifier calls carry a signed verifier-only token and the
+	// SDK never serves a verifier method unsigned. Fail closed at boot rather
+	// than accept anonymous pre-authentication calls.
+	if registeredVerifierCount() > 0 && cfg.JWTSecret == "" {
+		return fmt.Errorf("DECLARION_JWT_SECRET is required when verifiers are registered; verifier methods are never served without signature verification")
+	}
+
 	registeredCount := registeredHandlerCount()
 
 	mux := http.NewServeMux()
@@ -150,6 +165,7 @@ func Serve(cfg Config) error {
 	cfg.Logger.Info("sidecar starting",
 		zap.String("addr", cfg.Addr),
 		zap.Int("handlers", registeredCount),
+		zap.Int("verifiers", registeredVerifierCount()),
 	)
 
 	// Graceful shutdown on SIGTERM/SIGINT.
@@ -229,6 +245,17 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	traceparent := r.Header.Get("traceparent")
 	baggage := r.Header.Get("baggage")
 
+	// Route by validated token family. A verifier-dispatch token selects the
+	// verifier registry; the two registries are disjoint even when a code
+	// string collides, so a handler token can never reach a verifier and a
+	// verifier token can never reach a handler (registry-miss -> method-not-found).
+	if token != "" {
+		if aud, audErr := tokenAudience(token); audErr == nil && aud == VerifierTokenAudience {
+			handleVerifierDispatch(w, r, cfg, &req, token)
+			return
+		}
+	}
+
 	// Enforce RequireToken: reject requests without a valid bearer token.
 	if cfg.RequireToken && token == "" {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
@@ -250,6 +277,15 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 				"invalid continuation token", CodePermissionDenied, false))
 			return
 		}
+		// Exact-method binding (defense-in-depth): a token minted for one
+		// method cannot be replayed on another. Tolerated empty during rollout
+		// (older Core mints omit the method claim).
+		if claims.Method != "" && claims.Method != req.Method {
+			cfg.Logger.Warn("handler token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
+			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+				"token method mismatch", CodePermissionDenied, false))
+			return
+		}
 		tenantID = claims.TenantID
 		tenantCode = claims.TenantCode
 		userID = claims.UserID
@@ -269,11 +305,11 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		Baggage:     baggage,
 	})
 
-	// Extract reserved `_object_ids` from JSON-RPC params before the handler's
-	// typed params are unmarshalled. Reserved keys (underscore prefix) are
-	// platform-injected metadata; handlers see them via dedicated HandlerCtx fields,
-	// not as part of their declared params surface.
-	entityCode, objectIDs, paramsWithoutReserved, err := extractReservedParams(req.Params)
+	// Extract reserved keys from JSON-RPC params before the handler's typed
+	// params are unmarshalled. Reserved keys (underscore prefix) are
+	// platform-injected metadata; handlers see them via dedicated HandlerCtx
+	// fields, not as part of their declared params surface.
+	reserved, paramsWithoutReserved, err := extractReservedParams(req.Params)
 	if err != nil {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
 			err.Error(), CodeValidation, false))
@@ -290,18 +326,18 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 			zap.String("user_id", userID),
 			zap.String("audit_op", auditOp),
 		),
-		TenantID:      tenantID,
-		TenantCode:    tenantCode,
-		UserID:        userID,
-		AuditOp:       auditOp,
-		Action:        action,
-		Permissions:   permissions,
-		IsSuperadmin:  isSuperadmin,
-		IsTenantOwner: isTenantOwner,
-		IsGlobalUser:  isGlobalUser,
-		EntityCode:    entityCode,
-		ObjectIDs:     objectIDs,
-		Baggage:       baggage,
+		TenantID:              tenantID,
+		TenantCode:            tenantCode,
+		UserID:                userID,
+		AuditOp:               auditOp,
+		Action:                action,
+		Permissions:           permissions,
+		IsSuperadmin:          isSuperadmin,
+		IsTenantOwner:         isTenantOwner,
+		IsGlobalUser:          isGlobalUser,
+		EntityCode: reserved.EntityCode,
+		ObjectIDs:  reserved.ObjectIDs,
+		Baggage:    baggage,
 	}
 
 	// Dispatch with params stripped of reserved keys.
@@ -312,6 +348,137 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	}
 
 	writeJSON(w, http.StatusOK, NewResultResponse(req.ID, result))
+}
+
+// handleVerifierDispatch serves a verifier method under the verifier-only token
+// audience. Verifier methods ALWAYS require a signed token (no unsigned/test
+// bypass), the token authorizes exactly one method, and the Platform client is
+// built ONLY from an optional run-as credential header - never the call token.
+func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config, req *Request, token string) {
+	if cfg.JWTSecret == "" {
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+			"verifier methods require signed tokens", CodePermissionDenied, false))
+		return
+	}
+	claims, err := parseVerifierToken(token, cfg.JWTSecret)
+	if err != nil {
+		cfg.Logger.Warn("invalid verifier token", zap.Error(err), zap.String("method", req.Method))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+			"invalid verifier token", CodePermissionDenied, false))
+		return
+	}
+	// Exact-method binding before registry lookup: the token authorizes exactly
+	// one verifier method.
+	if claims.Method != req.Method {
+		cfg.Logger.Warn("verifier token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+			"token method mismatch", CodePermissionDenied, false))
+		return
+	}
+	fn, ok := lookupVerifier(req.Method)
+	if !ok {
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCMethodNotFound,
+			fmt.Sprintf("verifier %q not found", req.Method), "", false))
+		return
+	}
+	env, err := decodeExternalRequestEnvelope(req.Params)
+	if err != nil {
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
+			err.Error(), CodeValidation, false))
+		return
+	}
+	rawBody, err := base64.StdEncoding.DecodeString(env.RawBodyBase64)
+	if err != nil {
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
+			"invalid raw_body_base64", CodeValidation, false))
+		return
+	}
+
+	// Platform client ONLY from the run-as credential, never the verifier token.
+	var platClient *platform.Client
+	if runAs := r.Header.Get(RunAsTokenHeader); runAs != "" {
+		platClient = platform.New(platform.Config{
+			BaseURL:     cfg.PlatformURL,
+			Token:       runAs,
+			Traceparent: r.Header.Get("traceparent"),
+			Baggage:     r.Header.Get("baggage"),
+		})
+	}
+
+	vctx := &VerifierCtx{
+		Context:       r.Context(),
+		Logger:        cfg.Logger.With(zap.String("verifier", req.Method), zap.String("action", claims.Action)),
+		ActionCode:    env.ActionCode,
+		VerifierCode:  env.VerifierCode,
+		HTTPMethod:    env.HTTPMethod,
+		Path:          env.Path,
+		PathValues:    env.PathValues,
+		Query:         env.Query,
+		Headers:       env.Headers,
+		RawBody:       rawBody,
+		RequestID:     env.RequestID,
+		RemoteAddress: env.RemoteAddress,
+		Platform:      platClient,
+	}
+
+	result, err := fn(vctx)
+	if err != nil {
+		writeVerifierError(w, req.ID, req.Method, err, cfg)
+		return
+	}
+	writeJSON(w, http.StatusOK, NewResultResponse(req.ID, result))
+}
+
+// writeVerifierError renders a verifier's decline onto the JSON-RPC error
+// envelope with its outcome class. An error that is NOT a *VerifierError (a
+// verifier bug, a leaked infrastructure error) deliberately renders as
+// unavailable rather than as a rejection: Core must not turn an internal fault
+// into a permanent 401 that makes the provider drop the delivery.
+func writeVerifierError(w http.ResponseWriter, id, method string, err error, cfg *Config) {
+	var vErr *VerifierError
+	if errors.As(err, &vErr) {
+		app := vErr.appError()
+		cfg.Logger.Info("verifier declined request",
+			zap.String("verifier", method),
+			zap.String("outcome", string(vErr.Outcome)),
+			zap.String("reason", vErr.Reason))
+		writeJSON(w, http.StatusOK, NewErrorResponse(id, app.Code, app.Message, app.DeclarionCode, false))
+		return
+	}
+	cfg.Logger.Error("verifier failed", zap.String("verifier", method), zap.Error(err))
+	writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInternalError,
+		err.Error(), CodeVerifierUnavailable, false))
+}
+
+// externalRequestEnvelope is the closed `_external_request` wire envelope Core
+// sends to a verifier. Mirrors declarion-core engine.VerifierRequest JSON.
+type externalRequestEnvelope struct {
+	ActionCode    string              `json:"action_code"`
+	VerifierCode  string              `json:"verifier_code"`
+	HTTPMethod    string              `json:"http_method"`
+	Path          string              `json:"path"`
+	PathValues    map[string]string   `json:"path_values"`
+	Query         map[string][]string `json:"query"`
+	Headers       map[string][]string `json:"headers"`
+	RawBodyBase64 string              `json:"raw_body_base64"`
+	RequestID     string              `json:"request_id"`
+	RemoteAddress string              `json:"remote_address"`
+}
+
+// decodeExternalRequestEnvelope extracts the single reserved `_external_request`
+// envelope from the JSON-RPC params. The envelope is closed: provider data
+// lives in raw_body and allowlisted query/header values, never at top level.
+func decodeExternalRequestEnvelope(raw json.RawMessage) (*externalRequestEnvelope, error) {
+	var bag struct {
+		Env *externalRequestEnvelope `json:"_external_request"`
+	}
+	if err := json.Unmarshal(raw, &bag); err != nil {
+		return nil, fmt.Errorf("invalid verifier params: %w", err)
+	}
+	if bag.Env == nil {
+		return nil, fmt.Errorf("missing _external_request envelope")
+	}
+	return bag.Env, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -349,34 +516,54 @@ func writeHandlerError(w http.ResponseWriter, id, method string, err error, cfg 
 		err.Error(), CodeInternal, false))
 }
 
+// reservedParams holds the platform-injected metadata carried on JSON-RPC
+// params under reserved (`_`-prefixed) keys. These reach handlers only through
+// dedicated read-only HandlerCtx fields, never their typed param surface.
+type reservedParams struct {
+	EntityCode string
+	ObjectIDs  []string
+}
+
 // extractReservedParams pulls platform-reserved metadata from JSON-RPC params
 // and returns it plus the params with those keys removed. Non-object params pass
-// through untouched.
-func extractReservedParams(raw json.RawMessage) (string, []string, json.RawMessage, error) {
+// through untouched. Any UNKNOWN `_`-prefixed key is rejected (fail closed) so
+// a caller cannot smuggle spoofed reserved metadata past the typed handler
+// surface (business params never use the `_` prefix by convention).
+func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage, error) {
+	var out reservedParams
 	if len(raw) == 0 {
-		return "", nil, raw, nil
+		return out, raw, nil
 	}
 	var bag map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &bag); err != nil {
-		return "", nil, raw, nil
+		return out, raw, nil
 	}
-	var entityCode string
-	if entityRaw, ok := bag["_entity_code"]; ok {
-		delete(bag, "_entity_code")
-		if err := json.Unmarshal(entityRaw, &entityCode); err != nil {
-			return "", nil, raw, fmt.Errorf("invalid _entity_code: expected string: %w", err)
+	unmarshalReserved := func(key string, dst any) error {
+		v, ok := bag[key]
+		if !ok {
+			return nil
 		}
+		delete(bag, key)
+		if err := json.Unmarshal(v, dst); err != nil {
+			return fmt.Errorf("invalid %s: %w", key, err)
+		}
+		return nil
 	}
-	var ids []string
-	if idsRaw, ok := bag["_object_ids"]; ok {
-		delete(bag, "_object_ids")
-		if err := json.Unmarshal(idsRaw, &ids); err != nil {
-			return "", nil, raw, fmt.Errorf("invalid _object_ids: expected string array: %w", err)
+	if err := unmarshalReserved("_entity_code", &out.EntityCode); err != nil {
+		return out, raw, err
+	}
+	if err := unmarshalReserved("_object_ids", &out.ObjectIDs); err != nil {
+		return out, raw, err
+	}
+	// Fail closed on any remaining reserved-prefixed key.
+	for k := range bag {
+		if strings.HasPrefix(k, "_") {
+			return out, raw, fmt.Errorf("unknown reserved param %q", k)
 		}
 	}
 	cleaned, err := json.Marshal(bag)
 	if err != nil {
-		return "", nil, raw, fmt.Errorf("re-marshal params: %w", err)
+		return out, raw, fmt.Errorf("re-marshal params: %w", err)
 	}
-	return entityCode, ids, cleaned, nil
+	return out, cleaned, nil
 }

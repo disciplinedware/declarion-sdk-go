@@ -12,6 +12,15 @@ const (
 
 	// HandlerTokenScope is the scope value for handler-dispatch tokens.
 	HandlerTokenScope = "handler"
+
+	// VerifierTokenAudience distinguishes powerless verifier-dispatch tokens
+	// from handler-dispatch tokens. A verifier token carries no tenant, user,
+	// permission, or authority claim and is accepted ONLY for the verifier
+	// registry.
+	VerifierTokenAudience = "verifier_dispatch"
+
+	// VerifierTokenScope is the scope value for verifier-dispatch tokens.
+	VerifierTokenScope = "verifier"
 )
 
 // HandlerClaims mirrors declarion-core's auth.HandlerClaims (see
@@ -35,6 +44,11 @@ type HandlerClaims struct {
 	Action        string `json:"action"`
 	AuditOpID     string `json:"audit_op"`
 	Scope         string `json:"scope"`
+	// Method is the exact JSON-RPC method (handler code) this token authorizes.
+	// When present, the serve path enforces claim-method == request-method so a
+	// token minted for one method cannot be replayed on another. Minted by
+	// Core; tolerated empty during rollout (older Core mints omit it).
+	Method string `json:"method,omitempty"`
 	// Anonymous marks tokens minted for unauthenticated handlers (webhook
 	// ingress). Such tokens carry no UserID by construction; the platform's
 	// RequestVerifier established TenantID before mint. Sidecar handlers
