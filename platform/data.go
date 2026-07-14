@@ -484,22 +484,68 @@ func (d *DataClient) BulkUpdate(ctx context.Context, entity string, objectIDs []
 	}, nil
 }
 
-// BulkDelete soft-deletes rows by object_id via
-// POST /api/actions/{entity}.__delete.
+// DeleteOption configures a BulkDelete call. Options are variadic so the
+// existing three-argument BulkDelete call sites keep compiling unchanged.
+type DeleteOption func(*deleteOptions)
+
+type deleteOptions struct {
+	filters []FilterNode
+}
+
+// DeleteWhere addresses rows by PREDICATE instead of (or in addition to) by
+// id, using the same filter grammar as a List read. The platform resolves the
+// predicate to primary keys under the caller's DELETE access scope and deletes
+// them through the normal per-row path - hooks, audit before-images and file
+// cascades all still run.
+//
+//	// every result row of one backtest
+//	client.BulkDelete(ctx, "arm_result", nil,
+//	    platform.DeleteWhere(
+//	        platform.Eq("backtest_id", id),
+//	        platform.Eq("execution_origin", "backtest"),
+//	    ))
+//
+// Passed together with object_ids it is a GUARD - "delete these ids, but only
+// while they still match" - and the call then costs O(len(objectIDs)) however
+// many rows the predicate would match on its own.
+//
+// The server rejects a filter it cannot apply in full (an unknown field, an
+// operator with no value) rather than dropping the condition: on a read a
+// dropped condition merely widens what you see, on a delete it would widen what
+// you destroy.
+func DeleteWhere(filters ...FilterNode) DeleteOption {
+	return func(o *deleteOptions) { o.filters = append(o.filters, filters...) }
+}
+
+// BulkDelete deletes rows via POST /api/actions/{entity}.__delete.
+//
+// Rows are addressed by objectIDs, by a DeleteWhere predicate, or by both (an
+// intersection). At least one MUST be present: a delete that addresses nothing
+// is an error, never a table wipe. Deleting is soft or hard per the entity's
+// declaration.
 //
 // Composite-PK encoding matches BulkUpdate: callers pre-encode composite
 // PKs via the platform U+001F convention.
-func (d *DataClient) BulkDelete(ctx context.Context, entity string, objectIDs []string) (BulkDeleteResult, error) {
+func (d *DataClient) BulkDelete(ctx context.Context, entity string, objectIDs []string, opts ...DeleteOption) (BulkDeleteResult, error) {
 	if entity == "" {
 		return BulkDeleteResult{}, fmt.Errorf("data delete: entity is required")
 	}
-	if len(objectIDs) == 0 {
-		return BulkDeleteResult{}, fmt.Errorf("data delete %s: object_ids must be non-empty", entity)
+	var options deleteOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if len(objectIDs) == 0 && len(options.filters) == 0 {
+		return BulkDeleteResult{}, fmt.Errorf("data delete %s: object_ids or filters must be non-empty", entity)
 	}
 	path := fmt.Sprintf("/api/actions/%s.__delete", entity)
 	body := map[string]any{
-		"object_ids": objectIDs,
-		"entity":     entity,
+		"entity": entity,
+	}
+	if len(objectIDs) > 0 {
+		body["object_ids"] = objectIDs
+	}
+	if len(options.filters) > 0 {
+		body["filters"] = options.filters
 	}
 	envelope, err := d.dispatchWrite(ctx, path, body)
 	if err != nil {

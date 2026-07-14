@@ -588,7 +588,10 @@ func TestBulkDelete_flat_envelope(t *testing.T) {
 	}
 }
 
-// TestBulkDelete_rejects_empty_inputs guards programmer errors.
+// TestBulkDelete_rejects_empty_inputs guards programmer errors. Mirrors the
+// server's rule exactly: a delete that addresses NOTHING - no ids and no
+// predicate - must never leave the client, because on the wire it would read
+// like a request to delete everything.
 func TestBulkDelete_rejects_empty_inputs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("server must not be hit on empty-input rejection")
@@ -599,7 +602,60 @@ func TestBulkDelete_rejects_empty_inputs(t *testing.T) {
 		t.Error("empty entity: want error")
 	}
 	if _, err := c.Data().BulkDelete(t.Context(), "lead", nil); err == nil {
-		t.Error("empty object_ids: want error")
+		t.Error("no ids and no filters: want error")
+	}
+	if _, err := c.Data().BulkDelete(t.Context(), "lead", nil, DeleteWhere()); err == nil {
+		t.Error("no ids and an empty filter list: want error")
+	}
+}
+
+// TestBulkDelete_where_sends_filters pins the predicate-addressed wire shape:
+// `filters` alongside an ABSENT object_ids (not an empty array, which the
+// server would have to distinguish from "no ids at all").
+func TestBulkDelete_where_sends_filters(t *testing.T) {
+	srv, cap := newCaptureServer(t, `{"status":"success","result":{"deleted":7}}`)
+
+	c := New(Config{BaseURL: srv.URL})
+	res, err := c.Data().BulkDelete(t.Context(), "arm_result", nil,
+		DeleteWhere(Eq("backtest_id", "b1"), Eq("execution_origin", "backtest")))
+	if err != nil {
+		t.Fatalf("BulkDelete: %v", err)
+	}
+	if cap.path != "/api/actions/arm_result.__delete" {
+		t.Errorf("path: got %q", cap.path)
+	}
+	if _, present := cap.body["object_ids"]; present {
+		t.Error("body.object_ids must be absent when addressing by predicate alone")
+	}
+	filters, ok := cap.body["filters"].([]any)
+	if !ok || len(filters) != 2 {
+		t.Fatalf("body.filters: got %+v, want 2 nodes", cap.body["filters"])
+	}
+	first, _ := filters[0].(map[string]any)
+	if first["field"] != "backtest_id" || first["op"] != "eq" || first["value"] != "b1" {
+		t.Errorf("body.filters[0]: got %+v", first)
+	}
+	if res.Deleted != 7 {
+		t.Errorf("deleted: got %d, want 7", res.Deleted)
+	}
+}
+
+// TestBulkDelete_ids_and_filters_together sends both - the guard form, "delete
+// these ids, but only while they still match".
+func TestBulkDelete_ids_and_filters_together(t *testing.T) {
+	srv, cap := newCaptureServer(t, `{"status":"success","result":{"deleted":1}}`)
+
+	c := New(Config{BaseURL: srv.URL})
+	if _, err := c.Data().BulkDelete(t.Context(), "lead", []string{"u1"},
+		DeleteWhere(Eq("stage", "won"))); err != nil {
+		t.Fatalf("BulkDelete: %v", err)
+	}
+	ids, ok := cap.body["object_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != "u1" {
+		t.Errorf("body.object_ids: got %+v", cap.body["object_ids"])
+	}
+	if _, ok := cap.body["filters"].([]any); !ok {
+		t.Errorf("body.filters: got %+v, want the guard predicate", cap.body["filters"])
 	}
 }
 

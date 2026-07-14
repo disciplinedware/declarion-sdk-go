@@ -174,12 +174,25 @@ func (b *Batch) Update(entity string, objectIDs []string, fields map[string]any,
 }
 
 // Delete adds one __delete op for `entity` targeting the given object_ids
-// (carried at the op top level, not in params).
-func (b *Batch) Delete(entity string, objectIDs []string) *Batch {
+// (carried at the op top level, not in params), a DeleteWhere predicate, or
+// both (an intersection). At least one MUST be present.
+//
+// Inside a batch the whole delete runs in the batch's transaction, so a
+// predicate-addressed delete is atomic with the rest of the batch rather than
+// draining in independent pages.
+func (b *Batch) Delete(entity string, objectIDs []string, opts ...DeleteOption) *Batch {
+	var options deleteOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+	params := map[string]any{"entity": entity}
+	if len(options.filters) > 0 {
+		params["filters"] = options.filters
+	}
 	return b.AddOp(BatchOp{
 		Action:    fmt.Sprintf("%s.__delete", entity),
 		ObjectIDs: objectIDs,
-		Params:    map[string]any{"entity": entity},
+		Params:    params,
 	})
 }
 
