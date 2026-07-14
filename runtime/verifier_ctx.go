@@ -60,8 +60,38 @@ type VerifierCtx struct {
 
 	// Platform is a typed Declarion platform client, non-nil ONLY when a run-as
 	// credential was supplied. Verifiers use it for platform reads (e.g. secret
-	// reveal) under the declared run-as service user's grants.
+	// reveal) under the declared run-as service user's grants. It stands in the
+	// run-as user's own tenant (`_global`); to read a TENANT-SCOPED row, use
+	// PlatformFor.
 	Platform *platform.Client
+
+	// runAs / platformURL back PlatformFor. Kept unexported: a verifier gets the
+	// credential's REACH, never the credential itself.
+	runAs       string
+	platformURL string
+}
+
+// PlatformFor returns a platform client that reads in the named tenant, under the
+// SAME run-as service user.
+//
+// A verifier routinely has to authenticate against a row that lives in a customer
+// tenant - a customer's own bot, a customer's provider credential - while the
+// run-as user itself stands in `_global`. A tenant-scoped read from `_global`
+// simply does not see that row, and the verifier would fail closed on a request
+// that is perfectly valid. This is the supported way out: the `_global` service
+// user's grants apply as permissions-as-data in whatever tenant it addresses, so
+// the read is authorized by the SAME narrow role, in the right place.
+//
+// Returns nil when no run-as credential was supplied (there is nothing to act as).
+func (c *VerifierCtx) PlatformFor(tenantID string) *platform.Client {
+	if c.runAs == "" || tenantID == "" {
+		return c.Platform
+	}
+	return platform.New(platform.Config{
+		BaseURL:        c.platformURL,
+		Token:          c.runAs,
+		TargetTenantID: tenantID,
+	})
 }
 
 // DecodeJSON unmarshals the exact raw body into v. Returns an error when the

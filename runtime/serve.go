@@ -326,18 +326,18 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 			zap.String("user_id", userID),
 			zap.String("audit_op", auditOp),
 		),
-		TenantID:              tenantID,
-		TenantCode:            tenantCode,
-		UserID:                userID,
-		AuditOp:               auditOp,
-		Action:                action,
-		Permissions:           permissions,
-		IsSuperadmin:          isSuperadmin,
-		IsTenantOwner:         isTenantOwner,
-		IsGlobalUser:          isGlobalUser,
-		EntityCode: reserved.EntityCode,
-		ObjectIDs:  reserved.ObjectIDs,
-		Baggage:    baggage,
+		TenantID:      tenantID,
+		TenantCode:    tenantCode,
+		UserID:        userID,
+		AuditOp:       auditOp,
+		Action:        action,
+		Permissions:   permissions,
+		IsSuperadmin:  isSuperadmin,
+		IsTenantOwner: isTenantOwner,
+		IsGlobalUser:  isGlobalUser,
+		EntityCode:    reserved.EntityCode,
+		ObjectIDs:     reserved.ObjectIDs,
+		Baggage:       baggage,
 	}
 
 	// Dispatch with params stripped of reserved keys.
@@ -396,7 +396,8 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 
 	// Platform client ONLY from the run-as credential, never the verifier token.
 	var platClient *platform.Client
-	if runAs := r.Header.Get(RunAsTokenHeader); runAs != "" {
+	runAs := r.Header.Get(RunAsTokenHeader)
+	if runAs != "" {
 		platClient = platform.New(platform.Config{
 			BaseURL:     cfg.PlatformURL,
 			Token:       runAs,
@@ -419,6 +420,8 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 		RequestID:     env.RequestID,
 		RemoteAddress: env.RemoteAddress,
 		Platform:      platClient,
+		runAs:         runAs,
+		platformURL:   cfg.PlatformURL,
 	}
 
 	result, err := fn(vctx)
