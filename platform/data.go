@@ -26,6 +26,26 @@ import (
 // `_ids` key and the legacy CRUD write routes are rejected by the platform.
 type DataClient struct {
 	c *Client
+	// request carries per-client request options (currently the target tenant)
+	// onto every call this sub-client makes.
+	request []RequestOption
+}
+
+// WithTargetTenantID returns a DataClient that sends X-Declarion-Tenant-ID on
+// every call, so a cross-tenant service identity can read and write one
+// tenant's data. Mirrors Batch.WithTargetTenantID and the Actions client: a
+// data write is no less in need of a target tenant than an action is, and
+// before this a caller who needed one had to wrap the write in a batch.
+//
+// Returns a copy; the receiver is unchanged.
+func (d *DataClient) WithTargetTenantID(tenantID string) *DataClient {
+	return &DataClient{c: d.c, request: []RequestOption{WithTargetTenantID(tenantID)}}
+}
+
+// WithTargetTenantCode is WithTargetTenantID by tenant code
+// (X-Declarion-Tenant-Code). Mutually exclusive with it.
+func (d *DataClient) WithTargetTenantCode(tenantCode string) *DataClient {
+	return &DataClient{c: d.c, request: []RequestOption{WithTargetTenantCode(tenantCode)}}
 }
 
 // ListParams configures a List request. The server supports two pagination
@@ -139,7 +159,7 @@ func (d *DataClient) Get(ctx context.Context, entity string, pk map[string]any) 
 	for field, value := range pk {
 		q.Set(field, fmt.Sprint(value))
 	}
-	body, status, err := d.c.do(ctx, "GET", path, q, nil)
+	body, status, err := d.c.do(ctx, "GET", path, q, nil, d.request...)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +229,7 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 	}
 
 	path := fmt.Sprintf("/api/data/%s", entity)
-	body, status, err := d.c.do(ctx, "GET", path, q, nil)
+	body, status, err := d.c.do(ctx, "GET", path, q, nil, d.request...)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +620,7 @@ type actionEnvelope struct {
 // dispatchWrite POSTs the FLAT action body and returns the parsed action
 // envelope. Non-2xx surfaces as APIError with body truncated.
 func (d *DataClient) dispatchWrite(ctx context.Context, path string, body map[string]any) (actionEnvelope, error) {
-	respBody, status, err := d.c.do(ctx, "POST", path, nil, body)
+	respBody, status, err := d.c.do(ctx, "POST", path, nil, body, d.request...)
 	if err != nil {
 		return actionEnvelope{}, err
 	}
