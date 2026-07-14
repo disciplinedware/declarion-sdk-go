@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.17.0] - 2026-07-14
+
 ### Added
 
 - **Predicate-addressed delete.** `BulkDelete` takes a variadic `platform.DeleteWhere(filters...)` option carrying the same `FilterNode` grammar a list read uses, so rows can be addressed by predicate instead of (or in addition to) by id - passing both is a guard: "delete these ids, but only while they still match". `Batch.Delete` takes the same option. Variadic, so existing three-argument call sites compile unchanged. The client refuses to send a delete that addresses nothing. Requires declarion-core with filter-addressed `data.delete`.
