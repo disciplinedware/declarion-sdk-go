@@ -156,3 +156,51 @@ func writeTestFile(t *testing.T, path, content string) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+func TestBuildModuleSelector(t *testing.T) {
+	cases := []struct {
+		name       string
+		dependsOn  []string
+		moduleName string
+		want       string
+	}{
+		{
+			// The real consumer shape (declarion-crm): manifest depends_on already
+			// lists the platform base first, so the whole declared set + the
+			// consumer module is rendered in order.
+			name:       "consumer_with_full_depends_on",
+			dependsOn:  []string{"declarion-core", "agents"},
+			moduleName: "declarion-crm",
+			want:       "declarion-core,agents,declarion-crm",
+		},
+		{
+			// Synthetic fixture module (no depends_on): the platform base is
+			// prepended so the auth/tenant schema is present.
+			name:       "synthetic_no_depends_on",
+			dependsOn:  nil,
+			moduleName: "test-consumer",
+			want:       "declarion-core,test-consumer",
+		},
+		{
+			// A manifest that omits the base still gets it prepended (fail-safe).
+			name:       "depends_on_without_base",
+			dependsOn:  []string{"agents"},
+			moduleName: "widget",
+			want:       "declarion-core,agents,widget",
+		},
+		{
+			// No duplication when the base and a dep repeat.
+			name:       "dedup",
+			dependsOn:  []string{"declarion-core", "declarion-core", "agents"},
+			moduleName: "widget",
+			want:       "declarion-core,agents,widget",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := buildModuleSelector(tc.dependsOn, tc.moduleName); got != tc.want {
+				t.Fatalf("buildModuleSelector(%v, %q) = %q, want %q", tc.dependsOn, tc.moduleName, got, tc.want)
+			}
+		})
+	}
+}

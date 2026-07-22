@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **`testsdk.StartPlatform` derives `DECLARION_MODULES` from the consumer manifest's `depends_on` instead of the retired `_platform` module name.** declarion-core 0.40.1 renamed the platform base module `_platform` to `declarion-core` and fail-closes when `DECLARION_MODULES` names an unknown module OR omits any declared `depends_on` entry. The harness hardcoded `_platform,<consumer>` (and `_platform` for the bootstrap seeder), so every consumer's integration tests broke against core >= 0.40.1, and the two-element default could never satisfy a consumer that depends on more than the base (e.g. `declarion-crm` depends on `declarion-core` + `agents`). The module list is now built from the staged manifest's `depends_on` (in declared order) plus the consumer module, with `declarion-core` prepended when absent; the seeder scopes to `declarion-core`. A caller may still override the whole value via `WithContainerEnv("DECLARION_MODULES", ...)`. Covered by `TestBuildModuleSelector`.
+
 ## [v0.17.1] - 2026-07-22
 
 ## [v0.17.0] - 2026-07-14

@@ -65,12 +65,20 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 
 	// Core fail-closes on an unset DECLARION_MODULES (>= 0.4.7): every container
 	// that boots the binary - the migrate one-shot AND the API server - must
-	// name an explicit module allowlist or it refuses to start. testsdk already
-	// knows the consumer's module via WithModuleName, so derive _platform + that
-	// module: an isolated per-consumer set that leaves the platform domain
-	// modules shipped in the image (agents, commerce) inactive. A caller may
-	// override by passing DECLARION_MODULES through WithContainerEnv.
-	moduleSelector := "_platform," + cfg.moduleName
+	// name an explicit module allowlist or it refuses to start. Core also
+	// validates each module's depends_on is fully present and listed earlier
+	// (>= 0.40.1), so the list must carry the consumer's whole declared
+	// dependency set, not just the platform base. Derive it from the consumer
+	// manifest's depends_on + the consumer module (see buildModuleSelector),
+	// leaving other platform-domain modules in the image inactive. A caller may
+	// override the whole value via WithContainerEnv("DECLARION_MODULES", ...).
+	var moduleDependsOn []string
+	moduleSelectorName := cfg.moduleName
+	if mb != nil {
+		moduleDependsOn = mb.dependsOn
+		moduleSelectorName = mb.moduleName
+	}
+	moduleSelector := buildModuleSelector(moduleDependsOn, moduleSelectorName)
 	if v, ok := cfg.containerEnv["DECLARION_MODULES"]; ok && strings.TrimSpace(v) != "" {
 		moduleSelector = v
 	}
@@ -145,17 +153,18 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 	// that profile's platform-scheduler membership $lookup's the global
 	// `platform-scheduler@declarion.local` technical user created by the `bootstrap`
 	// profile. Without this step the API container fails to start with
-	// "reconcile tenant_bootstrap (boot): ... got 0 rows". Scoped to DECLARION_MODULES=
-	// _platform so it stays consumer-agnostic: it seeds only the platform bootstrap
-	// (platform-scheduler user, _global + default tenants) and never touches a
-	// consumer's bootstrap bundle (which may demand its own env vars).
+	// "reconcile tenant_bootstrap (boot): ... got 0 rows". Scoped to
+	// DECLARION_MODULES=declarion-core so it stays consumer-agnostic: it seeds
+	// only the platform bootstrap (platform-scheduler user, _global + default
+	// tenants) and never touches a consumer's bootstrap bundle (which may demand
+	// its own env vars).
 	seedReq := testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image: cfg.image,
 			Env: map[string]string{
 				"DECLARION_DATABASE_URL":   dbURL,
 				"DECLARION_MODULES_DIR":    "/app/modules",
-				"DECLARION_MODULES":        "_platform",
+				"DECLARION_MODULES":        platformBaseModule,
 				"DECLARION_SEED_PROFILES":  "bootstrap",
 				"DECLARION_SECRET_KEYS":    secretKeys,
 				"DECLARION_SECRET_PRIMARY": secretPrimaryKeyID,
@@ -433,6 +442,7 @@ var moduleNamePattern = regexp.MustCompile(`^_?[a-z][a-z0-9-]*$`)
 type moduleBundle struct {
 	sourceDir  string // absolute path to <moduleName>/ containing manifest.yaml
 	moduleName string
+	dependsOn  []string // manifest depends_on, drives the DECLARION_MODULES list
 	cleanup    func()
 }
 
@@ -464,7 +474,7 @@ func buildModuleDirBundle(cfg *config) (*moduleBundle, error) {
 		return nil, fmt.Errorf("module dir %q is not a directory", abs)
 	}
 
-	manifestName, err := readModuleManifestName(abs)
+	manifestName, dependsOn, err := readModuleManifest(abs)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +490,7 @@ func buildModuleDirBundle(cfg *config) (*moduleBundle, error) {
 	if filepath.Base(abs) != cfg.moduleName {
 		return nil, fmt.Errorf("module dir basename %q does not match module name %q", filepath.Base(abs), cfg.moduleName)
 	}
-	return &moduleBundle{sourceDir: abs, moduleName: cfg.moduleName, cleanup: func() {}}, nil
+	return &moduleBundle{sourceDir: abs, moduleName: cfg.moduleName, dependsOn: dependsOn, cleanup: func() {}}, nil
 }
 
 func buildSyntheticModuleBundle(cfg *config) (*moduleBundle, error) {
@@ -536,19 +546,64 @@ func attachModuleBundleFiles(req *testcontainers.GenericContainerRequest, b *mod
 	})
 }
 
-func readModuleManifestName(moduleDir string) (string, error) {
+func readModuleManifest(moduleDir string) (name string, dependsOn []string, err error) {
 	manifestPath := filepath.Join(moduleDir, "manifest.yaml")
 	b, err := os.ReadFile(manifestPath)
 	if err != nil {
-		return "", fmt.Errorf("read manifest %s: %w", manifestPath, err)
+		return "", nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
 	}
 	var manifest struct {
-		Name string `yaml:"name"`
+		Name      string   `yaml:"name"`
+		DependsOn []string `yaml:"depends_on"`
 	}
 	if err := yaml.Unmarshal(b, &manifest); err != nil {
-		return "", fmt.Errorf("parse manifest %s: %w", manifestPath, err)
+		return "", nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
-	return manifest.Name, nil
+	return manifest.Name, manifest.DependsOn, nil
+}
+
+// platformBaseModule is the renamed platform module (declarion-core >= 0.40.1,
+// formerly "_platform"): the base every consumer builds on, carrying the
+// auth/tenant/user schema.
+const platformBaseModule = "declarion-core"
+
+// buildModuleSelector renders the DECLARION_MODULES value for a consumer's
+// containers from the module the harness is starting: the consumer's declared
+// depends_on (in manifest order) followed by the consumer module itself.
+// declarion-core is prepended when the manifest does not already list it (e.g. a
+// synthetic fixture module with no depends_on) so the platform schema is always
+// present. Core validates that every depends_on entry appears EARLIER in the
+// list (internal/modules/manifest.go), so a manifest's depends_on MUST be in
+// load order - which it is by convention. A caller may still override the whole
+// value via WithContainerEnv("DECLARION_MODULES", ...).
+func buildModuleSelector(dependsOn []string, moduleName string) string {
+	mods := make([]string, 0, len(dependsOn)+2)
+	seen := make(map[string]bool)
+	add := func(m string) {
+		m = strings.TrimSpace(m)
+		if m == "" || seen[m] {
+			return
+		}
+		seen[m] = true
+		mods = append(mods, m)
+	}
+	if !seen[platformBaseModule] {
+		hasBase := false
+		for _, d := range dependsOn {
+			if strings.TrimSpace(d) == platformBaseModule {
+				hasBase = true
+				break
+			}
+		}
+		if !hasBase {
+			add(platformBaseModule)
+		}
+	}
+	for _, d := range dependsOn {
+		add(d)
+	}
+	add(moduleName)
+	return strings.Join(mods, ",")
 }
 
 func validateModuleName(name string) error {
