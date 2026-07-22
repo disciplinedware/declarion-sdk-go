@@ -1,0 +1,8 @@
+ok  	github.com/disciplinedware/declarion-sdk-go/conformance	0.009s
+?   	github.com/disciplinedware/declarion-sdk-go/conformance/cmd/conformance-harness	[no test files]
+ok  	github.com/disciplinedware/declarion-sdk-go/dispatch	0.006s
+?   	github.com/disciplinedware/declarion-sdk-go/examples/gen-functions-yaml	[no test files]
+ok  	github.com/disciplinedware/declarion-sdk-go/handlerparam	0.004s
+ok  	github.com/disciplinedware/declarion-sdk-go/platform	0.022s
+ok  	github.com/disciplinedware/declarion-sdk-go/runtime	0.029s
+ok  	github.com/disciplinedware/declarion-sdk-go/testsdk	0.098s
