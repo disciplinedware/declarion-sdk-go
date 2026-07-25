@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.18.0] - 2026-07-25
+
 ### Added
 
 - **Streaming action client.** `ActionsClient.InvokeStreaming(ctx, code, params)` consumes a dual-mode action's request-scoped SSE response over the same `/api/actions/{code}` route (the buffered `ActionsClient.Invoke` covers stream=false). It returns an `*ActionStream` after validating the mandatory start event, then exposes immutable start `Meta()`, `Next()`/`Data()` over ordered raw frame bytes, terminal `Err()`, and an idempotent `Close()` that cancels the request. The parser holds one bounded event (`MaxStreamEventSize`, 100MB - matching the platform's `DefaultHandlerResponseLimit`) plus fixed state, enforces that cap against the running byte total on every internal read fragment (never buffering an unterminated line past the cap before checking), joins multiline `data:` with LF, ignores comment heartbeats, and fails closed on CR, invalid UTF-8, unknown control events, out-of-order events, oversize events, or EOF before the terminal event. Pre-start non-2xx surfaces as `*APIError`; a post-start terminal failure surfaces as `*StreamError`. The client never interprets frame payloads, so native provider SSE passes through unchanged. Requires declarion-core with streaming-action support. This generic buffered+streaming action client is the ONLY thing a consumer needs to call any action (including `llm_connector.invoke`); the SDK stays universal and carries no action-specific typed client.
