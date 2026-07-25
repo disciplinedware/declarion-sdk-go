@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 // MaxResponseSize caps platform API response bodies this client will read
@@ -72,7 +71,17 @@ type Client struct {
 func New(cfg Config) *Client {
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 60 * time.Second}
+		// No hard client-level timeout. Every request is issued via
+		// http.NewRequestWithContext (see do()), so the caller's CONTEXT deadline
+		// is the single source of truth for how long a call may run. A fixed
+		// http.Client.Timeout is a HARD cap that silently overrides that context:
+		// the previous 60s default cut long-but-legitimate calls (e.g. an 85s
+		// LLM-connector inference whose action declares a 10m server timeout) at
+		// 60s, while the server kept running the detached, already-charged request
+		// - so the caller saw a transient error and could retry into a double
+		// charge. Callers pass a bounded context; server-side action timeouts
+		// bound anything that would otherwise hang.
+		httpClient = &http.Client{}
 	}
 	return &Client{
 		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),
@@ -143,10 +152,13 @@ func (c *Client) Params() *ParamsClient {
 	return &ParamsClient{c: c}
 }
 
-// do executes an HTTP request with all required headers.
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) ([]byte, int, error) {
+// newRequest builds an *http.Request with the platform's auth, trace, and
+// target-tenant headers applied. Shared by the buffered `do` path and the
+// streaming Actions().InvokeStreaming path so header construction and the
+// dk:/Bearer auth rule live in one place.
+func (c *Client) newRequest(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) (*http.Request, error) {
 	if c.baseURL == "" {
-		return nil, 0, fmt.Errorf("platform client: BaseURL not configured (set DECLARION_PLATFORM_URL)")
+		return nil, fmt.Errorf("platform client: BaseURL not configured (set DECLARION_PLATFORM_URL)")
 	}
 	ro := requestOptions{tenantID: c.tenantID, tenantCode: c.tenantCode}
 	for _, opt := range opts {
@@ -155,14 +167,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		}
 	}
 	if ro.tenantID != "" && ro.tenantCode != "" {
-		return nil, 0, fmt.Errorf("platform client: target tenant id and code are mutually exclusive")
+		return nil, fmt.Errorf("platform client: target tenant id and code are mutually exclusive")
 	}
 
 	var bodyReader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return nil, 0, fmt.Errorf("marshal request body: %w", err)
+			return nil, fmt.Errorf("marshal request body: %w", err)
 		}
 		bodyReader = bytes.NewReader(b)
 	}
@@ -174,7 +186,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
 	if err != nil {
-		return nil, 0, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -200,6 +212,15 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	if ro.tenantCode != "" {
 		req.Header.Set(TargetTenantCodeHeader, ro.tenantCode)
+	}
+	return req, nil
+}
+
+// do executes an HTTP request with all required headers and buffers the response.
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) ([]byte, int, error) {
+	req, err := c.newRequest(ctx, method, path, query, body, opts...)
+	if err != nil {
+		return nil, 0, err
 	}
 
 	resp, err := c.http.Do(req)

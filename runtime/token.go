@@ -2,13 +2,23 @@ package runtime
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 const (
 	// HandlerTokenAudience distinguishes handler-dispatch tokens from regular access tokens.
 	HandlerTokenAudience = "handler_dispatch"
+
+	// HandlerTokenIssuer is the issuer claim on handler-dispatch tokens.
+	HandlerTokenIssuer = "declarion"
+
+	// HandlerTokenGrace pads a minted token's expiry past the caller's declared
+	// timeout, matching declarion-core's auth.HandlerTokenGrace so the token
+	// stays valid for the full handler window plus clock skew.
+	HandlerTokenGrace = 30 * time.Second
 
 	// HandlerTokenScope is the scope value for handler-dispatch tokens.
 	HandlerTokenScope = "handler"
@@ -122,4 +132,94 @@ func parseHandlerToken(tokenString string, jwtSecret string) (*HandlerClaims, er
 	}
 
 	return claims, nil
+}
+
+// HandlerTokenParams are the inputs to MintHandlerToken.
+//
+// A minted token carries a baked authority snapshot (Permissions plus the
+// authority bools): declarion-core trusts these claims at dispatch time and does
+// NOT re-resolve the subject from the database. So a caller MUST mint
+// least-privilege tokens - only the permissions the call needs - and never assert
+// authority it should not have.
+type HandlerTokenParams struct {
+	// UserID is the acting principal (sub + uid). Required unless Anonymous.
+	// It need not reference a provisioned user row, but must be a valid UUID
+	// wherever the target action persists it.
+	UserID string
+	// TenantID (tid) is the acting tenant. Required. A plain handler token is
+	// tenant-pinned; the X-Declarion-Tenant-ID header does NOT override it.
+	TenantID   string
+	TenantCode string
+	// Permissions (perms) is the baked authority snapshot the target action
+	// gates on. Keep it least-privilege.
+	Permissions []string
+	// Action (action + method) is the action code this token authorizes. Required.
+	Action string
+	// TTL sets exp = now + TTL + HandlerTokenGrace. Keep it short.
+	TTL time.Duration
+	// Authority bits, default false. Set only when the acting principal
+	// genuinely holds them; never assert superadmin for a scoped call.
+	IsSuperadmin  bool
+	IsTenantOwner bool
+	IsGlobalUser  bool
+	// AuditOpID correlates the call in audit; optional.
+	AuditOpID string
+	// Anonymous marks an unauthenticated continuation (UserID may be empty).
+	Anonymous bool
+}
+
+// MintHandlerToken signs a handler-dispatch (continuation) token with the shared
+// platform JWT secret, byte-compatible with declarion-core's
+// auth.HandlerTokenManager.Mint. It exists for the case where a trusted operator
+// sidecar must ORIGINATE a callable_from:sidecar call rather than ride an inbound
+// Core dispatch (which already hands the sidecar a token to reuse): the sidecar
+// mints one for the acting principal and presents it as the Bearer credential.
+//
+// SECURITY: possession of the secret is the entire trust boundary (HS256 is
+// symmetric - the same secret validates and signs). Mint only least-privilege
+// tokens, for a verified or explicitly-trusted subject, with a short TTL.
+func MintHandlerToken(jwtSecret string, p HandlerTokenParams) (string, error) {
+	if jwtSecret == "" {
+		return "", fmt.Errorf("mint handler token: empty jwt secret")
+	}
+	if p.TenantID == "" {
+		return "", fmt.Errorf("mint handler token: TenantID required")
+	}
+	if p.Action == "" {
+		return "", fmt.Errorf("mint handler token: Action required")
+	}
+	if !p.Anonymous && p.UserID == "" {
+		return "", fmt.Errorf("mint handler token: UserID required unless Anonymous")
+	}
+	if p.TTL <= 0 {
+		return "", fmt.Errorf("mint handler token: TTL must be positive")
+	}
+	now := time.Now()
+	claims := &HandlerClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    HandlerTokenIssuer,
+			Subject:   p.UserID,
+			Audience:  jwt.ClaimStrings{HandlerTokenAudience},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(p.TTL + HandlerTokenGrace)),
+			ID:        uuid.NewString(),
+		},
+		UserID:        p.UserID,
+		TenantID:      p.TenantID,
+		TenantCode:    p.TenantCode,
+		Permissions:   p.Permissions,
+		IsSuperadmin:  p.IsSuperadmin,
+		IsTenantOwner: p.IsTenantOwner,
+		IsGlobalUser:  p.IsGlobalUser,
+		Action:        p.Action,
+		AuditOpID:     p.AuditOpID,
+		Scope:         HandlerTokenScope,
+		Method:        p.Action,
+		Anonymous:     p.Anonymous,
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(jwtSecret))
+	if err != nil {
+		return "", fmt.Errorf("mint handler token: %w", err)
+	}
+	return signed, nil
 }

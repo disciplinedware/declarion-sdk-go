@@ -251,7 +251,12 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.HandlerCt
 	})
 
 	ctx := &runtime.HandlerCtx{
-		Context:    context.Background(),
+		// A HARD deadline is essential here: the platform client imposes no timeout
+		// of its own, and t.Context() alone cannot cancel a SYNCHRONOUS request that
+		// is blocking the test body (the body must return for t.Context() to fire).
+		// boundedTestCtx derives a deadline from the -timeout watchdog so a stalled
+		// request fails on THIS test's context instead of hanging the whole suite.
+		Context:    boundedTestCtx(t),
 		Platform:   platClient,
 		Logger:     zap.NewNop().With(zap.String("test", t.Name()), zap.String("tenant", cfg.tenantCode)),
 		TenantID:   cfg.tenantID,
@@ -262,6 +267,27 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.HandlerCt
 	}
 
 	return ctx
+}
+
+// boundedTestCtx returns a context bounded by the test's -timeout deadline (with
+// a small headroom), parented to t.Context() so it also cancels when the test
+// (and its subtests) finish. The deadline is what actually bounds a SYNCHRONOUS
+// stalled platform request: t.Context() cancels only after the test body returns,
+// which never happens while the body is blocked inside that request, so it would
+// otherwise hang until the global `go test` watchdog kills the whole suite. The
+// headroom makes the request fail on this test's context just BEFORE the watchdog
+// fires, yielding a clear per-test deadline error. If -timeout is disabled
+// (t.Deadline() unset) there is no watchdog to race, so t.Context() suffices.
+func boundedTestCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx := t.Context()
+	dl, ok := t.Deadline()
+	if !ok {
+		return ctx
+	}
+	bctx, cancel := context.WithDeadline(ctx, dl.Add(-time.Second))
+	t.Cleanup(cancel)
+	return bctx
 }
 
 // SetParam is reserved for future per-test param overrides via the platform API.

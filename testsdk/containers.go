@@ -372,10 +372,12 @@ const (
 // async handler as this actor would dead-letter with "user is not a member
 // of tenant" if the actor has no real DB-backed `_global` ownership. This
 // mirrors declarion-core's own real implementation of platform-operator
-// identity (internal/auth/platform_operator.go grantPlatformOperatorTx and
-// migration 097_superadmin_global_backfill.up.sql) exactly - same table
-// shapes, same constraint names, same `platform_admin` / `["*"]` role - so it
-// stays correct as core's schema evolves under normal migration discipline.
+// identity (internal/auth/platform_operator.go grantPlatformOperatorTx):
+// platform-superadmin authority IS `_global` ownership (`isSuperadminUser ==
+// isTenantOwner(_global)`) plus the `platform_admin` / `["*"]` role - the
+// `users.is_superadmin` column that older cores carried was removed in the
+// auth-bootstrap redesign, so the users row sets no superadmin flag; the
+// `tenant_users` owner row below is what confers it.
 //
 // This runs AFTER core's own migrator + seeder one-shot containers (so the
 // `_global` tenant and the `platform_admin` role already exist per migration
@@ -393,8 +395,8 @@ func bootstrapTestPlatformActor(ctx context.Context, pgContainer *postgres.Postg
 		VALUES ('%[1]s', '%[2]s', '{"en":"System Test Tenant"}')
 		ON CONFLICT (id) DO NOTHING;
 
-		INSERT INTO declarion.users (id, email, display_name, kind, is_active, is_superadmin)
-		VALUES ('%[3]s', '%[4]s', '%[5]s', 'person', true, true)
+		INSERT INTO declarion.users (id, email, display_name, kind, is_active)
+		VALUES ('%[3]s', '%[4]s', '%[5]s', 'person', true)
 		ON CONFLICT (id) DO NOTHING;
 
 		INSERT INTO declarion.tenant_users (tenant_id, user_id, is_tenant_owner, created_by)
