@@ -210,6 +210,22 @@ func WithTenant(code string) CtxOption {
 	return func(c *ctxConfig) { c.tenantCode = code }
 }
 
+// WithTenantID mints the context STANDING in the given tenant id - a tenant the
+// test created for itself. WithTenant sets the code alone and keeps the
+// bootstrapped system tenant's id, so it cannot express "a SECOND tenant",
+// which is the shape a tenant-isolation proof needs. The code follows the id
+// because it is informational on this path: the id is what scopes every data
+// operation.
+//
+// The tenant row must exist before any data call - the platform resolves it on
+// every request.
+func WithTenantID(id string) CtxOption {
+	return func(c *ctxConfig) {
+		c.tenantID = id
+		c.tenantCode = id
+	}
+}
+
 // WithUser sets the test user ID.
 func WithUser(id string) CtxOption {
 	return func(c *ctxConfig) { c.userID = id }
@@ -315,10 +331,22 @@ func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string, isGlobalUse
 		Action:     "test",
 		AuditOpID:  "test-audit",
 		Scope:      runtime.HandlerTokenScope,
-		// The test actor is a superadmin: integration tests exercise handler
-		// logic against a real platform, not the RBAC layer, so the actor
-		// carries full authority and never fights permissions/role seeds.
-		// Core authorizes handler tokens from these signed claims.
+		// The test actor carries full authority: integration tests exercise
+		// handler logic against a real platform, not the RBAC layer, so the
+		// actor never fights permission or role seeds.
+		//
+		// The GRANT LIST is what carries it, and the flag alone no longer does.
+		// Core resolves a caller from one materialised list - an owner's `*` is
+		// put there when the token is issued, and the projection from claims to
+		// authority deliberately re-derives nothing from a flag, because "flag
+		// implies power" on the read path is exactly what one grant list
+		// removed. A token asserting the flag with an empty list is therefore
+		// admitted by NO gate: every call answers 403.
+		//
+		// So this mints what a real resolver-issued owner token looks like: the
+		// wildcard IN the list, the flags beside it for the paths that read an
+		// ownership FACT (which no wildcard satisfies) rather than a grant.
+		Permissions:  []string{"*"},
 		IsSuperadmin: true,
 		// IsGlobalUser set only when standing in `_global` (WithGlobalTenant),
 		// matching what a real `_global`-tenant session carries. The

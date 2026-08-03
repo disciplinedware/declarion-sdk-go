@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **The test harness mints the grant list, not just the flag.** `testsdk` minted its actor with `IsSuperadmin` and an EMPTY permission list, leaning on core's old `IsSuperadmin || IsTenantOwner || <grant match>` short-circuit. Core 0.44.0 resolves a caller from one materialised list and deliberately re-derives nothing from a flag, so that token became one no gate admits and every call in a consumer's integration tier answered 403. The actor now carries the wildcard IN the list, which is what a real resolver-issued owner token looks like; the flags stay beside it for the paths that read an ownership FACT rather than a grant.
+
+### Added
+
+- **`testsdk.WithTenantID(id)`.** Mints a context standing in a tenant the test created, instead of the bootstrapped system tenant. `WithTenant` sets the code alone and keeps the system tenant's id, so it cannot express a SECOND tenant - the shape a tenant-isolation proof needs. Consumers were hand-rolling the claim set to get it, which is how one change to what core admits reached each of them separately.
+
 ## [v0.18.0] - 2026-07-25
 
 ### Added
