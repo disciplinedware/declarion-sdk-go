@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Documentation
+
+- **`platform.FilterNode` says who owns the filter grammar, and names the value tokens.** The type carried the contract core has now deleted on its side - "Mirrors the server's allowlist exactly; changes require a coordinated SDK + server release" - which is a copy held together by a comment, and the comment was the only thing holding it. Go's `internal/` visibility rule means this package cannot import the server's declaration, so the copy is unavoidable; being unwatched was not. The constants are now documented as a convenience over the ONE authority (`engine.AllFilterOperators`), which core publishes at `GET /api/schema` under `filter_grammar` (`operators`, `no_value_ops`, `multi_value_ops`), and core carries a test that reads this file and fails when the two disagree in either direction. `Value` also documents the value tokens a filter may carry - `$user.id` / `$user.email` / `$user.tenant_id`, and `$now` with composable signed offsets (`$now+3w`, `$now+3w-1d`) - which a Go integrator could previously find only in the platform handbook. No behaviour change and no wire change.
+
 ## [v0.19.0] - 2026-08-03
 
 ### Fixed
