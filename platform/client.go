@@ -191,15 +191,7 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
-		// Declarion `dk:` API keys are sent raw (no Bearer prefix) per the
-		// middleware contract in declarion-core internal/server/middleware/auth.go:
-		// the API-key path is `case strings.HasPrefix(header, "dk:")`. JWTs and
-		// handler-dispatch continuation tokens go through the Bearer path.
-		if strings.HasPrefix(c.token, "dk:") {
-			req.Header.Set("Authorization", c.token)
-		} else {
-			req.Header.Set("Authorization", "Bearer "+c.token)
-		}
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	if c.traceparent != "" {
 		req.Header.Set("traceparent", c.traceparent)
