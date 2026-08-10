@@ -6,8 +6,8 @@ package platform
 //
 // A node is either:
 //   - A field condition (Field + Op + optional Value).
-//   - A logical OR group (Or: each inner slice is AND-ed, groups are OR-ed).
-//   - An explicit AND group (And: rarely needed, top-level is implicit AND).
+//   - A logical OR group (Or: direct child nodes are OR-ed).
+//   - An explicit AND group (And: direct child nodes are AND-ed).
 //
 // The SERVER owns the grammar and enforces it: an operator allowlist, a
 // nesting cap, and the rules for empty and mixed nodes. The SDK does NOT
@@ -40,8 +40,8 @@ type FilterNode struct {
 	Value any `json:"value,omitempty"`
 
 	// Logical grouping (recursive).
-	// Or: each inner slice is AND-ed internally, groups are OR-ed together.
-	Or [][]FilterNode `json:"or,omitempty"`
+	// Or: direct child nodes are OR-ed.
+	Or []FilterNode `json:"or,omitempty"`
 	// And: explicit AND (rarely needed — top-level slice is implicit AND).
 	And []FilterNode `json:"and,omitempty"`
 }
@@ -100,4 +100,14 @@ func IsNotEmpty(field string) FilterNode {
 // In is a convenience constructor for the "in" operator.
 func In(field string, values ...any) FilterNode {
 	return FilterNode{Field: field, Op: OpIn, Value: values}
+}
+
+// Or constructs a logical OR node from direct child nodes.
+func Or(nodes ...FilterNode) FilterNode {
+	return FilterNode{Or: nodes}
+}
+
+// And constructs a logical AND node from direct child nodes.
+func And(nodes ...FilterNode) FilterNode {
+	return FilterNode{And: nodes}
 }

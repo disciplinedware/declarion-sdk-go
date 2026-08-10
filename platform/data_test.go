@@ -736,7 +736,7 @@ func TestBulkRestore_rejects_empty_inputs(t *testing.T) {
 	}
 }
 
-// TestFilterNode_json_shape pins the wire format: tags, omitempty, nested Or/And.
+// TestFilterNode_json_shape pins the recursive wire format: tags and omitempty.
 // Prevents accidental renames or tag drift that would silently break server parsing.
 func TestFilterNode_json_shape(t *testing.T) {
 	cases := []struct {
@@ -747,10 +747,12 @@ func TestFilterNode_json_shape(t *testing.T) {
 		{"eq_leaf", Eq("name", "alice"), `{"field":"name","op":"eq","value":"alice"}`},
 		{"is_empty_no_value", IsEmpty("company_id"), `{"field":"company_id","op":"is_empty"}`},
 		{"in_array", In("status", "new", "open"), `{"field":"status","op":"in","value":["new","open"]}`},
-		{"or_group", FilterNode{Or: [][]FilterNode{{Eq("a", 1)}, {Eq("b", 2)}}},
-			`{"or":[[{"field":"a","op":"eq","value":1}],[{"field":"b","op":"eq","value":2}]]}`},
-		{"and_group", FilterNode{And: []FilterNode{Eq("a", 1), Eq("b", 2)}},
+		{"or_group", Or(Eq("a", 1), Eq("b", 2)),
+			`{"or":[{"field":"a","op":"eq","value":1},{"field":"b","op":"eq","value":2}]}`},
+		{"and_group", And(Eq("a", 1), Eq("b", 2)),
 			`{"and":[{"field":"a","op":"eq","value":1},{"field":"b","op":"eq","value":2}]}`},
+		{"nested_group", Or(Eq("a", 1), And(Eq("b", 2), Eq("c", 3))),
+			`{"or":[{"field":"a","op":"eq","value":1},{"and":[{"field":"b","op":"eq","value":2},{"field":"c","op":"eq","value":3}]}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

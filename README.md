@@ -175,6 +175,28 @@ into consumer code).
 - Reserved JSON-RPC metadata extraction: `_entity_code` and `_object_ids` are removed from typed params and exposed on `ctx.EntityCode` / `ctx.ObjectIDs`
 - Verifier serving for anonymous provider webhooks: a separate registry and token audience on the same `/rpc` endpoint (see below)
 
+## Filter trees
+
+`platform.FilterNode` mirrors Declarion's recursive filter tree. A top-level
+`[]FilterNode` is implicit AND; each `or` and `and` field contains direct child
+nodes, so the same tree can be nested without translating OR branches:
+
+```go
+filters := []platform.FilterNode{
+	platform.Or(
+		platform.Eq("kind", "premium"),
+		platform.And(
+			platform.Eq("kind", "featured"),
+			platform.Eq("status", "open"),
+		),
+	),
+}
+```
+
+The SDK serializes this tree and leaves structural validation to Declarion. The
+server's filter grammar, operator vocabulary, and nesting limit are published
+by `GET /api/schema` under `filter_grammar`.
+
 ## Verifiers (anonymous provider webhooks)
 
 A provider webhook (Stripe, Telegram, a payment gateway) reaches Declarion with no credential - the provider is not your user and will never hold your token. It can prove who it is (a signature over the body, a secret token it echoes back), but only your application knows how to check that proof.
