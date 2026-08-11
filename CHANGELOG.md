@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.20.0] - 2026-08-11
+
 ### Changed
 
 - **BREAKING: `platform.FilterNode` uses direct recursive logical children.** `Or` is now `[]FilterNode`, matching Declarion Core's final JSON/YAML tree; use `platform.Or(...)` and `platform.And(...)` for logical nodes. The removed OR-of-AND representation has no decoder or compatibility path.
