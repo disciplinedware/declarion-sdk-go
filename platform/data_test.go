@@ -107,6 +107,7 @@ func TestList_query_params(t *testing.T) {
 		Sort:           "-created_at",
 		Search:         "acme",
 		Select:         []string{"id", "name", "company_id"},
+		Expand:         []string{"properties", "refs"},
 		Count:          CountWith,
 		IncludeDeleted: true,
 		Filters: []FilterNode{
@@ -124,6 +125,7 @@ func TestList_query_params(t *testing.T) {
 		"sort":            "-created_at",
 		"search":          "acme",
 		"select":          "id,name,company_id",
+		"expand":          "properties,refs",
 		"count":           "with",
 		"include_deleted": "true",
 	}
@@ -171,7 +173,7 @@ func TestList_omits_empty_params(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 
-	forbidden := []string{"limit", "after", "page", "per_page", "sort", "search", "filters", "select", "count", "include_count", "include_deleted"}
+	forbidden := []string{"limit", "after", "page", "per_page", "sort", "search", "filters", "select", "expand", "count", "include_count", "include_deleted"}
 	for _, k := range forbidden {
 		if _, ok := captured[k]; ok {
 			t.Errorf("empty ListParams must not emit %q (got %q)", k, captured.Get(k))

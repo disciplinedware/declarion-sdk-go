@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **`ListParams.Expand`** - name the sub-resources a read should attach: `refs`, `statuses`, `properties`, `evidence`. The platform has always accepted `expand`; the SDK had no way to send it, so a row's declared object properties were unreachable through this client and a caller needing one had no read that could return it. Empty keeps today's behaviour exactly - display-level refs and nothing else. Composes with `Select`, because the platform's field trim never removes a `$`-prefixed sub-resource key.
+
 ## [v0.20.0] - 2026-08-11
 
 ### Changed

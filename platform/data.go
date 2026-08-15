@@ -98,6 +98,14 @@ type ListParams struct {
 	Filters []FilterNode // structured filter tree (see filter.go). Serialized as JSON in `filters`.
 	Select  []string     // field projection; empty = all columns.
 
+	// Expand names the sub-resources the platform should attach to each row:
+	// "refs", "statuses", "properties", "evidence". Empty asks for the default,
+	// which attaches display-level refs and NOTHING else - so a row's declared
+	// object properties are absent from a plain read and a caller that needs one
+	// must say so. `select` never trims a `$`-prefixed sub-resource key, so a
+	// projection and an expansion compose.
+	Expand []string
+
 	// Count selects the total-count strategy, mapping to the platform's `count`
 	// query param. Empty (CountNone) returns no total (Meta.Total = 0). Cursor
 	// mode omits count by default to save a query; set this when a total is
@@ -217,6 +225,9 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 	}
 	if len(params.Select) > 0 {
 		q.Set("select", strings.Join(params.Select, ","))
+	}
+	if len(params.Expand) > 0 {
+		q.Set("expand", strings.Join(params.Expand, ","))
 	}
 	if params.Count != CountNone {
 		// The platform reads the row-count strategy from `count` (modes
