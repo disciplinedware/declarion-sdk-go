@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,11 +34,14 @@ type BatchOp struct {
 
 // BatchOpResult is the per-op result returned by system.batch.
 type BatchOpResult struct {
-	Index     int    `json:"index"`
-	OK        bool   `json:"ok"`
-	Result    any    `json:"result,omitempty"`
-	Error     string `json:"error,omitempty"`
-	ErrorCode string `json:"error_code,omitempty"`
+	Index int `json:"index"`
+	// Action names the dispatched op, so an entry says WHICH op it describes
+	// without matching its index against the request by position.
+	Action string `json:"action,omitempty"`
+	OK     bool   `json:"ok"`
+	Result any    `json:"result,omitempty"`
+	// The failure, in the one shape every carrier sends.
+	Error *errs.Error `json:"error,omitempty"`
 }
 
 // BatchResponse is the wire-level result of system.batch. Committed=false

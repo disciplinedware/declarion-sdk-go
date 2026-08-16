@@ -167,6 +167,13 @@ func (e *Error) Code() string {
 	return e.Type
 }
 
+// HasCode reports whether err carries this declared type anywhere in its
+// wrapped chain. The one way a consumer branches on identity.
+func HasCode(err error, code string) bool {
+	e, ok := From(err)
+	return ok && e.Code() == code
+}
+
 func (e *Error) Ext(key string) (any, bool) {
 	v, ok := e.Fields[key]
 	return v, ok

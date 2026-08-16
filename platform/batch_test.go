@@ -313,7 +313,7 @@ func TestBatch_ExecuteSurfacesLogicalFailure(t *testing.T) {
 				"committed": false,
 				"results": [
 					{"index": 0, "ok": true, "result": {}},
-					{"index": 1, "ok": false, "error": "permission denied", "error_code": "PERMISSION_DENIED"}
+					{"index": 1, "action": "c.d", "ok": false, "error": {"type": "/errors/permission.denied", "title": "You do not have permission to do this.", "retryable": false, "required_permission": "action:c.d"}}
 				]
 			}
 		}`))
@@ -331,8 +331,13 @@ func TestBatch_ExecuteSurfacesLogicalFailure(t *testing.T) {
 	if resp.Committed {
 		t.Fatal("expected committed=false")
 	}
-	if resp.Results[1].ErrorCode != "PERMISSION_DENIED" {
-		t.Errorf("error_code: got %q", resp.Results[1].ErrorCode)
+	failed := resp.Results[1]
+	if failed.Error.Code() != "permission.denied" {
+		t.Errorf("type: got %q, want permission.denied", failed.Error.Code())
+	}
+	// A declared member reaches the caller through the same object.
+	if got, _ := failed.Error.ExtString("required_permission"); got != "action:c.d" {
+		t.Errorf("required_permission: got %q, want action:c.d", got)
 	}
 }
 
