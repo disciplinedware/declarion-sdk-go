@@ -172,7 +172,7 @@ func (d *DataClient) Get(ctx context.Context, entity string, pk map[string]any) 
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: string(body), Path: path}
+		return nil, errorFromResponse(status, body, path)
 	}
 	var envelope struct {
 		Data map[string]any `json:"data"`
@@ -245,7 +245,7 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: string(body), Path: path}
+		return nil, errorFromResponse(status, body, path)
 	}
 	var result ListResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -636,7 +636,7 @@ func (d *DataClient) dispatchWrite(ctx context.Context, path string, body map[st
 		return actionEnvelope{}, err
 	}
 	if status < 200 || status >= 300 {
-		return actionEnvelope{}, &APIError{StatusCode: status, Body: truncate(string(respBody), 500), Path: path}
+		return actionEnvelope{}, errorFromResponse(status, respBody, path)
 	}
 	var envelope actionEnvelope
 	if err := json.Unmarshal(respBody, &envelope); err != nil {

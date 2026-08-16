@@ -235,14 +235,3 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 	return respBody, resp.StatusCode, nil
 }
-
-// APIError represents a non-2xx response from the platform.
-type APIError struct {
-	StatusCode int
-	Body       string
-	Path       string
-}
-
-func (e *APIError) Error() string {
-	return fmt.Sprintf("platform API %s: HTTP %d: %s", e.Path, e.StatusCode, e.Body)
-}

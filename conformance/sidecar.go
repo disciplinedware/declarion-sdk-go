@@ -1,6 +1,8 @@
 package conformance
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"fmt"
 
 	"github.com/disciplinedware/declarion-sdk-go/runtime"
@@ -42,12 +44,9 @@ func handleEcho(ctx *runtime.HandlerCtx, p echoParams) (echoResult, error) {
 type errorParams struct{}
 
 func handleError(ctx *runtime.HandlerCtx, _ errorParams) (any, error) {
-	return nil, &runtime.AppError{
-		Code:          runtime.JSONRPCAppError,
-		Message:       "conformance test error",
-		DeclarionCode: runtime.CodeExternalService,
-		Retryable:     true,
-	}
+	// A handler declaring its OWN type, which is what the harness asserts
+	// crosses the boundary unchanged.
+	return nil, errs.New("platform.external_service_error").WithDetail("conformance test error")
 }
 
 type callbackParams struct {
@@ -60,11 +59,7 @@ type callbackResult struct {
 
 func handleCallback(ctx *runtime.HandlerCtx, p callbackParams) (callbackResult, error) {
 	if p.CallbackURL == "" {
-		return callbackResult{}, &runtime.AppError{
-			Code:          runtime.JSONRPCInvalidParams,
-			Message:       "callback_url is required",
-			DeclarionCode: runtime.CodeValidation,
-		}
+		return callbackResult{}, errs.New("action.invalid_params").WithDetail("callback_url is required")
 	}
 
 	// Use ctx.Platform directly - it auto-attaches auth, traceparent, and baggage headers.

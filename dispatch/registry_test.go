@@ -1,8 +1,9 @@
 package dispatch
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,6 +74,7 @@ func TestRegistryDecodeError(t *testing.T) {
 	reg := NewRegistry[testCtx]()
 	RegisterHandler[testCtx, echoParams, echoResult](reg, "echo", func(testCtx, echoParams) (echoResult, error) { return echoResult{}, nil })
 	_, err := reg.Execute("echo", testCtx{}, json.RawMessage(`{"name": 1}`))
-	var decodeErr *DecodeError
-	require.True(t, errors.As(err, &decodeErr), "err = %v", err)
+	e, ok := errs.From(err)
+	require.True(t, ok, "err = %v", err)
+	require.Equal(t, "action.invalid_params", e.Code())
 }

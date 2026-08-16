@@ -1,12 +1,13 @@
 package platform
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 )
 
@@ -207,11 +208,11 @@ func TestList_offset_mode_params(t *testing.T) {
 	}
 }
 
-// TestList_http_error surfaces non-2xx as APIError with body preserved.
+// TestList_http_error surfaces the platform's own error object, type intact.
 func TestList_http_error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(422)
-		_, _ = w.Write([]byte(`{"error":{"code":"VALIDATION","message":"bad op"}}`))
+		_, _ = w.Write([]byte(`{"type":"/errors/entity.validation_failed","title":"bad op","retryable":false}`))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -222,15 +223,17 @@ func TestList_http_error(t *testing.T) {
 	if err == nil {
 		t.Fatal("List: want error on 422, got nil")
 	}
-	apiErr, ok := err.(*APIError)
+	apiErr, ok := errs.From(err)
 	if !ok {
-		t.Fatalf("err type: got %T, want *APIError", err)
+		t.Fatalf("err type: got %T, want *errs.Error", err)
 	}
-	if apiErr.StatusCode != 422 {
-		t.Errorf("status: got %d, want 422", apiErr.StatusCode)
+	if status, _ := StatusOf(apiErr); status != 422 {
+		t.Errorf("status: got %d, want 422", apiErr.Status)
 	}
-	if !strings.Contains(apiErr.Body, "VALIDATION") {
-		t.Errorf("body not preserved: %q", apiErr.Body)
+	// The TYPE, not a body to grep: the platform answered with an error object
+	// and its identity is what a caller branches on.
+	if apiErr.Code() != "entity.validation_failed" {
+		t.Errorf("type: got %q, want entity.validation_failed", apiErr.Code())
 	}
 }
 
@@ -506,12 +509,12 @@ func TestBulkUpdate_omits_optional_fields(t *testing.T) {
 	}
 }
 
-// TestBulkUpdate_propagates_http_error surfaces non-2xx from the action
-// endpoint as APIError. Callers errors.As on it.
+// TestBulkUpdate_propagates_http_error surfaces the platform's own error
+// object from the action endpoint, type intact.
 func TestBulkUpdate_propagates_http_error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(422)
-		_, _ = w.Write([]byte(`{"error":{"code":"VALIDATION","message":"missing pk"}}`))
+		_, _ = w.Write([]byte(`{"type":"/errors/entity.validation_failed","title":"missing pk","retryable":false}`))
 	}))
 	t.Cleanup(srv.Close)
 
@@ -520,18 +523,20 @@ func TestBulkUpdate_propagates_http_error(t *testing.T) {
 	if err == nil {
 		t.Fatal("BulkUpdate: want error on 422")
 	}
-	apiErr, ok := err.(*APIError)
+	apiErr, ok := errs.From(err)
 	if !ok {
-		t.Fatalf("err type: got %T, want *APIError", err)
+		t.Fatalf("err type: got %T, want *errs.Error", err)
 	}
-	if apiErr.StatusCode != 422 {
-		t.Errorf("status: got %d, want 422", apiErr.StatusCode)
+	if status, _ := StatusOf(apiErr); status != 422 {
+		t.Errorf("status: got %d, want 422", apiErr.Status)
 	}
-	if !strings.Contains(apiErr.Body, "VALIDATION") {
-		t.Errorf("body not preserved: %q", apiErr.Body)
+	// The TYPE, not a body to grep: the platform answered with an error object
+	// and its identity is what a caller branches on.
+	if apiErr.Code() != "entity.validation_failed" {
+		t.Errorf("type: got %q, want entity.validation_failed", apiErr.Code())
 	}
-	if apiErr.Path != "/api/actions/lead.__update" {
-		t.Errorf("path: got %q", apiErr.Path)
+	if p, _ := apiErr.ExtString(FieldPath); p != "" {
+		t.Errorf("the platform's own object carries no client-side path: %q", p)
 	}
 }
 
@@ -661,7 +666,8 @@ func TestBulkDelete_ids_and_filters_together(t *testing.T) {
 	}
 }
 
-// TestBulkDelete_propagates_http_error surfaces non-2xx as APIError.
+// TestBulkDelete_propagates_http_error: a body that is NOT an error object
+// becomes the client's own transport type, carrying the status and the path.
 func TestBulkDelete_propagates_http_error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(403)
@@ -674,15 +680,17 @@ func TestBulkDelete_propagates_http_error(t *testing.T) {
 	if err == nil {
 		t.Fatal("BulkDelete: want error on 403")
 	}
-	apiErr, ok := err.(*APIError)
+	apiErr, ok := errs.From(err)
 	if !ok {
-		t.Fatalf("err type: got %T, want *APIError", err)
+		t.Fatalf("err type: got %T, want *errs.Error", err)
 	}
-	if apiErr.StatusCode != 403 {
-		t.Errorf("status: got %d, want 403", apiErr.StatusCode)
+	if status, _ := StatusOf(apiErr); status != 403 {
+		t.Errorf("status: got %d, want 403", status)
 	}
-	if apiErr.Path != "/api/actions/lead.__delete" {
-		t.Errorf("path: got %q", apiErr.Path)
+	// A body that is not an error object is the client's own
+	// transport.unreadable_response, and THAT one names the path it called.
+	if p, _ := apiErr.ExtString(FieldPath); p != "/api/actions/lead.__delete" {
+		t.Errorf("path: got %q", p)
 	}
 }
 

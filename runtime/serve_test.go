@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"encoding/json"
 	"io"
 	"net/http"
@@ -161,19 +163,17 @@ func TestHandleRPC_protocol_version_mismatch(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
-	assert.Equal(t, CodeProtocolMismatch, rpcResp.Error.Data.DeclarionCode)
+	assert.Equal(t, "transport.protocol_mismatch", rpcResp.Error.Data.Code())
 	assert.Equal(t, "req-1", rpcResp.ID)
 }
 
 func TestHandleRPC_handler_error(t *testing.T) {
 	ClearHandlerRegistry()
 	RegisterHandler[echoParams, echoResult]("test.fail", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
-		return echoResult{}, &AppError{
-			Code:          JSONRPCAppError,
-			Message:       "ClickUp API 429",
-			DeclarionCode: CodeExternalService,
-			Retryable:     true,
-		}
+		// A handler declares its OWN type and nothing else - no status, no
+		// title, no numeric code. Declarion fills the title.
+		return echoResult{}, errs.New("platform.external_service_error").
+			WithDetail("ClickUp API 429")
 	})
 	srv := setupTestServer(t)
 	defer srv.Close()
@@ -187,9 +187,10 @@ func TestHandleRPC_handler_error(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
-	assert.Equal(t, "ClickUp API 429", rpcResp.Error.Message)
-	assert.Equal(t, CodeExternalService, rpcResp.Error.Data.DeclarionCode)
-	assert.True(t, rpcResp.Error.Data.Retryable)
+	assert.Equal(t, "platform.external_service_error", rpcResp.Error.Data.Code())
+	assert.Equal(t, "ClickUp API 429", rpcResp.Error.Data.Detail)
+	assert.Empty(t, rpcResp.Error.Data.Title,
+		"a sidecar carries no title: Declarion renders one from its own declarations, in the caller's language")
 }
 
 func TestHandleRPC_invalid_params(t *testing.T) {
@@ -212,7 +213,7 @@ func TestHandleRPC_invalid_params(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCInvalidParams, rpcResp.Error.Code)
-	assert.Equal(t, CodeValidation, rpcResp.Error.Data.DeclarionCode)
+	assert.Equal(t, "action.invalid_params", rpcResp.Error.Data.Code())
 }
 
 func TestHandleRPC_invalid_token(t *testing.T) {
@@ -237,7 +238,7 @@ func TestHandleRPC_invalid_token(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
-	assert.Equal(t, CodePermissionDenied, rpcResp.Error.Data.DeclarionCode)
+	assert.Contains(t, []string{"auth.unauthorized", "auth.invalid_token"}, rpcResp.Error.Data.Code())
 }
 
 func TestHandleRPC_context_propagation(t *testing.T) {
@@ -317,7 +318,7 @@ func TestHandleRPC_require_token_rejects_unauthenticated(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
-	assert.Equal(t, CodePermissionDenied, rpcResp.Error.Data.DeclarionCode)
+	assert.Contains(t, []string{"auth.unauthorized", "auth.invalid_token"}, rpcResp.Error.Data.Code())
 }
 
 func TestHandleRPC_require_token_allows_authenticated(t *testing.T) {
@@ -364,4 +365,41 @@ func TestHandleRPC_wrong_jsonrpc_version(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCInvalidRequest, rpcResp.Error.Code)
+}
+
+// A sidecar carries no catalogue, and must not need one.
+//
+// It declares a TYPE and the facts that go with it; Declarion resolves the
+// title from the declarations IT loaded, in the caller's language. A sidecar
+// that shipped its own titles would freeze one language into a second place and
+// drift from the first the day a translation was corrected.
+func TestASidecarWithNoCatalogueStillAnswersFully(t *testing.T) {
+	errs.SetCatalogue(nil, "")
+	ClearHandlerRegistry()
+	RegisterHandler[echoParams, echoResult]("test.no_catalogue", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
+		return echoResult{}, errs.New("acme-portal.quota_exhausted", errs.Args{"limit": 100}).
+			WithDetail("the daily quota is spent")
+	})
+	srv := setupTestServer(t)
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.no_catalogue","params":{"name":"x"}}`
+	resp, err := http.Post(srv.URL+"/rpc", "application/json", strings.NewReader(body))
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	var rpcResp Response
+	respBody, _ := io.ReadAll(resp.Body)
+	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
+	require.NotNil(t, rpcResp.Error)
+	require.NotNil(t, rpcResp.Error.Data)
+
+	assert.Equal(t, "acme-portal.quota_exhausted", rpcResp.Error.Data.Code(),
+		"the handler's own type, whether or not this process can name it")
+	assert.Equal(t, "the daily quota is spent", rpcResp.Error.Data.Detail)
+	assert.Empty(t, rpcResp.Error.Data.Title, "the title is Declarion's to fill")
+	assert.Zero(t, rpcResp.Error.Data.Status, "a status describes a boundary this handler is not at")
+	limit, ok := rpcResp.Error.Data.ExtInt("limit")
+	assert.True(t, ok)
+	assert.Equal(t, 100, limit, "a declared member reaches the platform as a member")
 }

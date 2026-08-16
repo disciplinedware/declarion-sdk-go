@@ -331,7 +331,13 @@ func TestVerifierDispatch_OutcomeMapping(t *testing.T) {
 
 			require.NotNil(t, resp.Error, "decline must produce an error envelope")
 			require.NotNil(t, resp.Error.Data)
-			assert.Equal(t, tc.wantCode, resp.Error.Data.DeclarionCode)
+			assert.Equal(t, tc.wantCode, resp.Error.Data.Code())
+			// The REASON is internal telemetry, one hop from a public webhook
+			// response. It stays in the log line and never on this wire.
+			assert.Empty(t, resp.Error.Data.Detail)
+			assert.NotContains(t, resp.Error.Message, "secret mismatch")
+			assert.NotContains(t, resp.Error.Message, "malformed update")
+			assert.NotContains(t, resp.Error.Message, "transition in flight")
 		})
 	}
 }

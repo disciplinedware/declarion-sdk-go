@@ -1,23 +1,11 @@
 package runtime
 
-import "fmt"
-
 // HandlerFunc is the function signature for a typed handler.
 // P is the params type, R is the result type.
+//
+// A handler reports a failure by returning an *errs.Error: the type it
+// declares, its detail, and the members that type carries. Nothing else - no
+// status, no title, no numeric code. Declarion fills the title from the
+// declarations it loaded, in the caller's language, which is why a sidecar
+// needs no catalogue of its own.
 type HandlerFunc[P any, R any] func(ctx *HandlerCtx, params P) (R, error)
-
-// AppError is an application-level error that maps to a JSON-RPC error response.
-// Handlers return this to control the error code, message, and Declarion code.
-type AppError struct {
-	Code          int
-	Message       string
-	DeclarionCode string
-	Retryable     bool
-}
-
-func (e *AppError) Error() string {
-	if e.DeclarionCode != "" {
-		return fmt.Sprintf("[%s] %s", e.DeclarionCode, e.Message)
-	}
-	return e.Message
-}

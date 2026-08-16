@@ -17,6 +17,8 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	kern "github.com/disciplinedware/declarion-sdk-go/dispatch"
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
@@ -212,17 +214,16 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError,
-				fmt.Sprintf("request body exceeded %d bytes (limit %d)", maxErr.Limit, MaxRequestSize),
-				"", false))
+				errs.New("platform.body_too_large", errs.Args{"threshold": MaxRequestSize}).Because(err)))
 			return
 		}
-		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, "read error", "", false))
+		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, errs.New("platform.read_body_failed").Because(err)))
 		return
 	}
 
 	var req Request
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, "invalid JSON", "", false))
+		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, errs.New("platform.invalid_body").Because(err)))
 		return
 	}
 
@@ -230,13 +231,12 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	protoVer := r.Header.Get("X-Declarion-Protocol-Version")
 	if protoVer != "" && protoVer != ProtocolVersion {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-			fmt.Sprintf("protocol version mismatch: expected %s, got %s", ProtocolVersion, protoVer),
-			CodeProtocolMismatch, false))
+			errs.New("transport.protocol_mismatch", errs.Args{"expected": ProtocolVersion, "got": protoVer})))
 		return
 	}
 
 	if req.JSONRPC != "2.0" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidRequest, "jsonrpc must be 2.0", "", false))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidRequest, errs.New("platform.invalid_body_shape").WithDetail("jsonrpc must be 2.0")))
 		return
 	}
 
@@ -258,8 +258,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 
 	// Enforce RequireToken: reject requests without a valid bearer token.
 	if cfg.RequireToken && token == "" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-			"authorization required", CodePermissionDenied, false))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError, errs.New("auth.unauthorized")))
 		return
 	}
 
@@ -273,8 +272,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		claims, err := parseHandlerToken(token, cfg.JWTSecret)
 		if err != nil {
 			cfg.Logger.Warn("invalid continuation token", zap.Error(err), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-				"invalid continuation token", CodePermissionDenied, false))
+			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError, errs.New("auth.invalid_token")))
 			return
 		}
 		// Exact-method binding (defense-in-depth): a token minted for one
@@ -282,8 +280,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		// (older Core mints omit the method claim).
 		if claims.Method != "" && claims.Method != req.Method {
 			cfg.Logger.Warn("handler token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-				"token method mismatch", CodePermissionDenied, false))
+			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError, errs.New("auth.invalid_token").WithDetail("token method mismatch")))
 			return
 		}
 		tenantID = claims.TenantID
@@ -312,7 +309,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	reserved, paramsWithoutReserved, err := extractReservedParams(req.Params)
 	if err != nil {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			err.Error(), CodeValidation, false))
+			errs.New("action.invalid_params").Because(err)))
 		return
 	}
 
@@ -358,14 +355,14 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config, req *Request, token string) {
 	if cfg.JWTSecret == "" {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-			"verifier methods require signed tokens", CodePermissionDenied, false))
+			errs.New("auth.unauthorized").WithDetail("verifier methods require signed tokens")))
 		return
 	}
 	claims, err := parseVerifierToken(token, cfg.JWTSecret)
 	if err != nil {
 		cfg.Logger.Warn("invalid verifier token", zap.Error(err), zap.String("method", req.Method))
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-			"invalid verifier token", CodePermissionDenied, false))
+			errs.New("auth.invalid_token").WithDetail("invalid verifier token")))
 		return
 	}
 	// Exact-method binding before registry lookup: the token authorizes exactly
@@ -373,25 +370,25 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 	if claims.Method != req.Method {
 		cfg.Logger.Warn("verifier token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
-			"token method mismatch", CodePermissionDenied, false))
+			errs.New("auth.invalid_token").WithDetail("token method mismatch")))
 		return
 	}
 	fn, ok := lookupVerifier(req.Method)
 	if !ok {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCMethodNotFound,
-			fmt.Sprintf("verifier %q not found", req.Method), "", false))
+			errs.New("handler.not_registered").WithDetail(fmt.Sprintf("verifier %q not found", req.Method))))
 		return
 	}
 	env, err := decodeExternalRequestEnvelope(req.Params)
 	if err != nil {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			err.Error(), CodeValidation, false))
+			errs.New("action.invalid_params").Because(err)))
 		return
 	}
 	rawBody, err := base64.StdEncoding.DecodeString(env.RawBodyBase64)
 	if err != nil {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			"invalid raw_body_base64", CodeValidation, false))
+			errs.New("action.invalid_params").WithDetail("invalid raw_body_base64").Because(err)))
 		return
 	}
 
@@ -441,17 +438,19 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 func writeVerifierError(w http.ResponseWriter, id, method string, err error, cfg *Config) {
 	var vErr *VerifierError
 	if errors.As(err, &vErr) {
-		app := vErr.appError()
+		wireErr, rpc := vErr.wire()
+		// The reason is logged HERE and nowhere else: it is internal telemetry
+		// one hop from a public webhook response.
 		cfg.Logger.Info("verifier declined request",
 			zap.String("verifier", method),
 			zap.String("outcome", string(vErr.Outcome)),
 			zap.String("reason", vErr.Reason))
-		writeJSON(w, http.StatusOK, NewErrorResponse(id, app.Code, app.Message, app.DeclarionCode, false))
+		writeJSON(w, http.StatusOK, NewErrorResponse(id, rpc, wireErr))
 		return
 	}
 	cfg.Logger.Error("verifier failed", zap.String("verifier", method), zap.Error(err))
 	writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInternalError,
-		err.Error(), CodeVerifierUnavailable, false))
+		errs.New(CodeVerifierUnavailable).Because(err)))
 }
 
 // externalRequestEnvelope is the closed `_external_request` wire envelope Core
@@ -497,27 +496,26 @@ func extractBearer(auth string) string {
 	return ""
 }
 
+// writeHandlerError renders what a handler returned.
+//
+// A handler's OWN type passes through untouched - identity surviving the hop is
+// the whole point, and Declarion fills the title from its own declarations, so
+// a sidecar needs no catalogue. Everything else takes a declared type here,
+// with the original as the logged cause: an unrecognised Go error's text is not
+// a vetted sentence and does not belong on a wire.
 func writeHandlerError(w http.ResponseWriter, id, method string, err error, cfg *Config) {
-	var appErr *AppError
-	if errors.As(err, &appErr) {
-		writeJSON(w, http.StatusOK, NewErrorResponse(id, appErr.Code,
-			appErr.Message, appErr.DeclarionCode, appErr.Retryable))
-		return
-	}
-	var decodeErr *kern.DecodeError
-	if errors.As(err, &decodeErr) {
-		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInvalidParams,
-			err.Error(), CodeValidation, false))
+	if e, ok := errs.From(err); ok {
+		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCCodeFor(e), e))
 		return
 	}
 	if errors.Is(err, kern.ErrNotFound) {
 		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCMethodNotFound,
-			fmt.Sprintf("method %q not found", method), "", false))
+			errs.New("handler.not_registered").WithDetail(fmt.Sprintf("method %q not found", method))))
 		return
 	}
 	cfg.Logger.Error("handler error", zap.String("method", method), zap.Error(err))
 	writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInternalError,
-		err.Error(), CodeInternal, false))
+		errs.New(errs.CodeInternalError).Because(err)))
 }
 
 // reservedParams holds the platform-injected metadata carried on JSON-RPC

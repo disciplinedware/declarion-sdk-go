@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"bufio"
 	"bytes"
 	"context"
@@ -44,26 +46,25 @@ const MaxStreamEventSize = 100 * 1024 * 1024
 // matching.
 var errEventTooLarge = errors.New("streaming action: event exceeds max size")
 
-// StreamError is the typed terminal error carried by a declarion.stream.end
-// error event - a failure AFTER the stream committed HTTP 200. A failure BEFORE
-// the stream started surfaces as *APIError from InvokeStreaming instead.
-type StreamError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Details any    `json:"details,omitempty"`
-}
-
-func (e *StreamError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("stream error %s: %s", e.Code, e.Message)
-	}
-	return fmt.Sprintf("stream error %s", e.Code)
-}
-
-// streamEndEnvelope is the terminal declarion.stream.end JSON body.
+// streamEndEnvelope is the terminal declarion.stream.end JSON body. The error
+// is the same object every other carrier sends, so one parser reads them all -
+// and `delivered_frames` / `delivered_bytes` say how much of the answer arrived
+// before it stopped, which is the fact a reader of a truncated stream needs and
+// cannot otherwise have.
 type streamEndEnvelope struct {
-	Status string       `json:"status"`
-	Error  *StreamError `json:"error,omitempty"`
+	Status          string      `json:"status"`
+	Error           *errs.Error `json:"error,omitempty"`
+	DeliveredFrames int         `json:"delivered_frames,omitempty"`
+	DeliveredBytes  int64       `json:"delivered_bytes,omitempty"`
+}
+
+// Delivered is how much of the answer reached this reader before the stream
+// ended, from the terminal event rather than counted locally: the two would
+// disagree the moment a frame was dropped between them, and the server's count
+// is the one that describes what it sent. Zero until the stream is done.
+type Delivered struct {
+	Frames int
+	Bytes  int64
 }
 
 // sseEvent is one parsed SSE event: an empty Event means an ordinary data frame.
@@ -75,12 +76,12 @@ type sseEvent struct {
 // ActionStream is an incremental reader over a streaming action response. Usage:
 //
 //	s, err := client.Actions().InvokeStreaming(ctx, code, params)
-//	if err != nil { ... } // pre-start failure (*APIError) or start-validation error
+//	if err != nil { ... } // pre-start failure: the platform's own error object
 //	defer s.Close()
 //	for s.Next() {
 //	    frame := s.Data() // raw UTF-8 payload bytes
 //	}
-//	if err := s.Err(); err != nil { ... } // post-start terminal error (*StreamError) or parse error
+//	if err := s.Err(); err != nil { ... } // post-start terminal error, same object
 //
 // ActionStream is NOT safe for concurrent use. Close is idempotent and cancels
 // the underlying request.
@@ -94,6 +95,7 @@ type ActionStream struct {
 	cur           []byte
 	err           error
 	done          bool
+	delivered     Delivered
 	// closed is atomic because Close may be called from another goroutine to
 	// unblock a stalled Next (the idiomatic streaming-reader contract). Every
 	// other field is owned by the single Next-calling goroutine.
@@ -166,7 +168,7 @@ func (a *ActionsClient) InvokeStreaming(ctx context.Context, code string, params
 		raw, _ := io.ReadAll(http.MaxBytesReader(nil, resp.Body, MaxResponseSize))
 		_ = resp.Body.Close()
 		cancel()
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(raw), Path: path}
+		return nil, errorFromResponse(resp.StatusCode, raw, path)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
 		_ = resp.Body.Close()
@@ -229,10 +231,16 @@ func (s *ActionStream) Next() bool {
 // Data returns the current data frame's raw bytes (valid until the next Next).
 func (s *ActionStream) Data() []byte { return s.cur }
 
-// Err returns the terminal error: nil on a clean success end, *StreamError on a
-// post-start terminal error event, or a parse/transport error otherwise.
-// Meaningful only after Next returns false.
+// Err returns the terminal error: nil on a clean success end, the action's own
+// *errs.Error on a post-start terminal error event, or a parse/transport error
+// otherwise. Meaningful only after Next returns false.
 func (s *ActionStream) Err() error { return s.err }
+
+// Delivered reports what the terminal event said reached this reader. A
+// partially delivered answer is not a failed one, and a caller that cannot tell
+// them apart either discards work that arrived or trusts an answer that did
+// not finish. Meaningful only after Next returns false.
+func (s *ActionStream) Delivered() Delivered { return s.delivered }
 
 // Close cancels the request and releases the body. Idempotent and safe to call
 // from another goroutine to unblock a stalled Next; it touches only the atomic
@@ -265,6 +273,7 @@ func (s *ActionStream) finishTerminal(data []byte) {
 		s.finish(fmt.Errorf("streaming action: malformed terminal event: %w", err))
 		return
 	}
+	s.delivered = Delivered{Frames: env.DeliveredFrames, Bytes: env.DeliveredBytes}
 	switch env.Status {
 	case "success":
 		s.finish(nil)

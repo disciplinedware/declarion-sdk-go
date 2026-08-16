@@ -37,7 +37,7 @@ func (p *ParamsClient) Lookup(ctx context.Context, code string) (value any, foun
 		return nil, false, "", ferr
 	}
 	if status < 200 || status >= 300 {
-		return nil, false, "", &APIError{StatusCode: status, Body: string(body), Path: path}
+		return nil, false, "", errorFromResponse(status, body, path)
 	}
 	var result paramLookupResponse
 	if jerr := json.Unmarshal(body, &result); jerr != nil {

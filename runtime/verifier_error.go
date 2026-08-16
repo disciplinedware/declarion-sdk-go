@@ -1,6 +1,10 @@
 package runtime
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+)
 
 // VerifierOutcome is the outcome class a verifier signals when it does not
 // accept a request. It is the ONLY thing an anonymous caller learns: Declarion
@@ -25,15 +29,16 @@ const (
 	VerifierUnavailable    VerifierOutcome = "unavailable"
 )
 
-// Wire codes Core maps back to an outcome class (declarion_code on the JSON-RPC
-// error envelope). They MUST match declarion-core engine.VerifierOutcomeCode*.
-// Any other code - including a plain error a verifier returns by accident -
-// classifies as unavailable on Core's side, which is the fail-safe direction: a
-// misbehaving verifier is a platform problem, never a silent client rejection.
+// The declared types Core maps back to an outcome class, carried as the error
+// object's `type` on the JSON-RPC error envelope. They MUST match
+// declarion-core engine.VerifierOutcomeCode*. Any other type - including a
+// plain error a verifier returns by accident - classifies as unavailable on
+// Core's side, which is the fail-safe direction: a misbehaving verifier is a
+// platform problem, never a silent client rejection.
 const (
-	CodeVerifierRejected       = "VERIFIER_REJECTED"
-	CodeVerifierInvalidRequest = "VERIFIER_INVALID_REQUEST"
-	CodeVerifierUnavailable    = "VERIFIER_UNAVAILABLE"
+	CodeVerifierRejected       = "verifier.rejected"
+	CodeVerifierInvalidRequest = "verifier.invalid_request"
+	CodeVerifierUnavailable    = "verifier.unavailable"
 )
 
 // VerifierError is how a verifier declines a request. Reason is internal
@@ -47,19 +52,23 @@ func (e *VerifierError) Error() string {
 	return fmt.Sprintf("verifier outcome %s: %s", e.Outcome, e.Reason)
 }
 
-// appError renders the outcome onto the JSON-RPC error envelope Core decodes.
-// An unknown/zero outcome renders as unavailable - a verifier that forgets to
-// set the class must never fail open into an accepted-looking response.
-func (e *VerifierError) appError() *AppError {
-	code := CodeVerifierUnavailable
-	rpc := JSONRPCInternalError
+// wire renders the outcome onto the JSON-RPC error envelope Core decodes. An
+// unknown/zero outcome renders as unavailable - a verifier that forgets to set
+// the class must never fail open into an accepted-looking response.
+//
+// The REASON is not on it. It is internal telemetry, written by whoever refused
+// and never vetted for a caller, and this envelope is one hop from a public
+// webhook response - so it stays in the log line beside this call and the wire
+// carries the type alone.
+func (e *VerifierError) wire() (*errs.Error, int) {
+	code, rpc := CodeVerifierUnavailable, JSONRPCInternalError
 	switch e.Outcome {
 	case VerifierRejected:
 		code, rpc = CodeVerifierRejected, JSONRPCAppError
 	case VerifierInvalidRequest:
 		code, rpc = CodeVerifierInvalidRequest, JSONRPCInvalidParams
 	}
-	return &AppError{Code: rpc, Message: e.Reason, DeclarionCode: code}
+	return errs.New(code), rpc
 }
 
 // Reject declines a request as a credential/lookup failure (public 401).

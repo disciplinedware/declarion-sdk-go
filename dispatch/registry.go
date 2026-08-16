@@ -1,6 +1,8 @@
 package dispatch
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,13 +12,6 @@ import (
 )
 
 var ErrNotFound = errors.New("handler not found")
-
-type DecodeError struct {
-	Err error
-}
-
-func (e *DecodeError) Error() string { return "invalid params: " + e.Err.Error() }
-func (e *DecodeError) Unwrap() error { return e.Err }
 
 type Declaration struct {
 	Code   string
@@ -54,7 +49,7 @@ func RegisterHandler[C, P, R any](reg *Registry[C], code string, fn func(C, P) (
 			var p P
 			if len(raw) > 0 {
 				if err := json.Unmarshal(raw, &p); err != nil {
-					return nil, &DecodeError{Err: err}
+					return nil, errs.New("action.invalid_params").Because(err)
 				}
 			}
 			result, err := fn(ctx, p)

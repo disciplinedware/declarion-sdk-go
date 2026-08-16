@@ -5,6 +5,8 @@
 package conformance
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -156,9 +158,11 @@ type jsonrpcResp struct {
 }
 
 type jsonrpcErr struct {
-	Code    int             `json:"code"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data,omitempty"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	// Data is the failure, decoded as the one object every Declarion path
+	// carries - which is itself part of what this harness checks.
+	Data *errs.Error `json:"data,omitempty"`
 }
 
 func (h *Harness) callSidecar(method string, params any, token, traceparent, protoVer string) (*jsonrpcResp, http.Header, error) {
@@ -230,7 +234,8 @@ func (h *Harness) testSuccessResponse() {
 	h.record("success_response", nil)
 }
 
-// testErrorResponse: call conformance.error, expect a structured JSON-RPC error.
+// testErrorResponse: call conformance.error and check the error OBJECT it
+// carries - the handler's own type, its detail, and no title.
 func (h *Harness) testErrorResponse() {
 	token := h.mintToken("t1", "u1", "conformance.error", "op2")
 	resp, _, err := h.callSidecar("conformance.error", map[string]any{}, token, "", runtime.ProtocolVersion)
@@ -244,6 +249,25 @@ func (h *Harness) testErrorResponse() {
 	}
 	if resp.Error.Code >= 0 {
 		h.record("error_response", fmt.Errorf("expected negative error code, got %d", resp.Error.Code))
+		return
+	}
+	// The FACTS are in data, and the handler's own type is what must have
+	// survived. A sidecar carries no title: Declarion renders one from its own
+	// declarations, in the caller's language.
+	if resp.Error.Data == nil {
+		h.record("error_response", fmt.Errorf("expected an error object at error.data, got none"))
+		return
+	}
+	if got := resp.Error.Data.Code(); got != "platform.external_service_error" {
+		h.record("error_response", fmt.Errorf("type: got %q, want platform.external_service_error", got))
+		return
+	}
+	if resp.Error.Data.Title != "" {
+		h.record("error_response", fmt.Errorf("a sidecar must not send a title, got %q", resp.Error.Data.Title))
+		return
+	}
+	if resp.Error.Data.Detail != "conformance test error" {
+		h.record("error_response", fmt.Errorf("detail: got %q", resp.Error.Data.Detail))
 		return
 	}
 	h.record("error_response", nil)

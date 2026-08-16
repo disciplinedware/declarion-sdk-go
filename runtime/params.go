@@ -1,7 +1,7 @@
 package runtime
 
 import (
-	"fmt"
+	"github.com/disciplinedware/declarion-sdk-go/errs"
 
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
@@ -52,11 +52,7 @@ func GetRequiredParam[T any](ctx *HandlerCtx, code string) (T, error) {
 		return zero, paramResolveError(code, err)
 	}
 	if !found {
-		return zero, &AppError{
-			Code:          JSONRPCAppError,
-			Message:       fmt.Sprintf("required parameter %q is not configured", code),
-			DeclarionCode: CodeInternal,
-		}
+		return zero, errs.New("param.not_configured", errs.Args{"param": code})
 	}
 	v, cerr := platform.Convert[T](value)
 	if cerr != nil {
@@ -68,10 +64,6 @@ func GetRequiredParam[T any](ctx *HandlerCtx, code string) (T, error) {
 // paramResolveError is the single shape for a param fetch that fails for an
 // infrastructure reason (transport / coercion). The parameter code is baked
 // in, so callers propagate the error as-is and never re-name it.
-func paramResolveError(code string, err error) *AppError {
-	return &AppError{
-		Code:          JSONRPCAppError,
-		Message:       fmt.Sprintf("resolve parameter %q: %s", code, err),
-		DeclarionCode: CodeInternal,
-	}
+func paramResolveError(code string, err error) *errs.Error {
+	return errs.New("param.resolve_failed", errs.Args{"param": code}).Because(err)
 }

@@ -223,7 +223,7 @@ func (b *Batch) Execute(ctx context.Context) (*BatchResponse, error) {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, &APIError{StatusCode: status, Body: string(respBody), Path: "/api/actions/system.batch"}
+		return nil, errorFromResponse(status, respBody, "/api/actions/system.batch")
 	}
 	// The HTTP layer wraps handler returns under a "result" envelope.
 	var envelope struct {

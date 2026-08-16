@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"context"
 	"errors"
 	"io"
@@ -85,17 +87,17 @@ func TestInvokeStreaming_PreStartNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = io.WriteString(w, `{"error":{"code":"ACTION_FAILED","message":"nope"}}`)
+		_, _ = io.WriteString(w, `{"type":"/errors/action.failed","title":"nope","retryable":false}`)
 	}))
 	t.Cleanup(srv.Close)
 
 	_, err := streamClient(t, srv).Actions().InvokeStreaming(context.Background(), "x", InvokeParams{})
-	var apiErr *APIError
-	if !errors.As(err, &apiErr) {
-		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	apiErr, ok := errs.From(err)
+	if !ok {
+		t.Fatalf("expected *errs.Error, got %T: %v", err, err)
 	}
-	if apiErr.StatusCode != http.StatusBadRequest {
-		t.Errorf("status: got %d, want 400", apiErr.StatusCode)
+	if status, _ := StatusOf(apiErr); status != http.StatusBadRequest {
+		t.Errorf("status: got %d, want 400", apiErr.Status)
 	}
 }
 
@@ -122,7 +124,9 @@ func TestInvokeStreaming_FirstEventNotStart(t *testing.T) {
 }
 
 func TestInvokeStreaming_TerminalError(t *testing.T) {
-	end := "event: declarion.stream.end\ndata: {\"status\":\"error\",\"error\":{\"code\":\"BOOM\",\"message\":\"kaboom\"}}\n\n"
+	end := "event: declarion.stream.end\ndata: {\"status\":\"error\"," +
+		"\"error\":{\"type\":\"/errors/action.failed\",\"title\":\"kaboom\",\"retryable\":false}," +
+		"\"delivered_frames\":1,\"delivered_bytes\":7}\n\n"
 	c := streamClient(t, sseServer(t, startBlock+dataBlock("frame-0")+end))
 	s, err := c.Actions().InvokeStreaming(context.Background(), "x", InvokeParams{})
 	if err != nil {
@@ -134,12 +138,18 @@ func TestInvokeStreaming_TerminalError(t *testing.T) {
 	if len(frames) != 1 || frames[0] != "frame-0" {
 		t.Errorf("frames before error: got %v, want [frame-0]", frames)
 	}
-	var se *StreamError
-	if !errors.As(streamErr, &se) {
-		t.Fatalf("expected *StreamError, got %T: %v", streamErr, streamErr)
+	se, ok := errs.From(streamErr)
+	if !ok {
+		t.Fatalf("expected *errs.Error, got %T: %v", streamErr, streamErr)
 	}
-	if se.Code != "BOOM" || se.Message != "kaboom" {
+	if se.Code() != "action.failed" || se.Title != "kaboom" {
 		t.Errorf("stream error: got %+v", se)
+	}
+	// A partially delivered answer is not a failed one. The counts come from
+	// the terminal event, not from counting locally - the server's count is the
+	// one that describes what it sent.
+	if got := s.Delivered(); got.Frames != 1 || got.Bytes != 7 {
+		t.Errorf("delivered: got %+v, want {Frames:1 Bytes:7}", got)
 	}
 }
 

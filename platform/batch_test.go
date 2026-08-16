@@ -1,10 +1,11 @@
 package platform
 
 import (
+	"github.com/disciplinedware/declarion-sdk-go/errs"
+
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -344,7 +345,17 @@ func TestBatch_ExecuteHTTPErrorReturnsError(t *testing.T) {
 
 	c := New(Config{BaseURL: srv.URL})
 	_, err := c.NewBatch().Call("x.y", nil).Execute(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "500") {
-		t.Fatalf("expected 5xx APIError, got %v", err)
+	// `{"error":"boom"}` is not an error object, so it is not the platform
+	// speaking - it takes the client's own transport type, carrying the status
+	// that actually answered.
+	e, ok := errs.From(err)
+	if !ok {
+		t.Fatalf("expected a typed failure, got %T: %v", err, err)
+	}
+	if e.Code() != TypeUnreadableResponse {
+		t.Fatalf("type: got %q, want %q", e.Code(), TypeUnreadableResponse)
+	}
+	if status, _ := StatusOf(e); status != http.StatusInternalServerError {
+		t.Fatalf("status: got %d, want 500", status)
 	}
 }
