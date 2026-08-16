@@ -1,18 +1,9 @@
-// Package errscheck is the call-site gate for errs.New.
-//
-// A code is a plain string written the way the YAML declares it, so the
-// compiler cannot catch a typo. This gate reads the AST instead - the same
-// place this platform already puts guarantees the Go type system cannot
-// express - and fails when a call site names a code no module declares,
-// passes more than one Args, or passes a member name the type does not
-// declare.
+// Package errscheck is the call-site gate for errs.New: a code is a plain
+// string, so the compiler cannot catch a typo and this reads the AST instead.
 //
 // An application calls Check once from a test, against the catalogue its own
-// loader produces in the same test process. Nothing is generated and nothing
-// can be stale.
-//
-// It lives apart from errs so a sidecar importing the error object does not
-// link the Go parser.
+// loader produces in the same process, so nothing can be stale. It lives
+// apart from errs so a sidecar does not link the Go parser.
 package errscheck
 
 import (
@@ -29,13 +20,12 @@ import (
 	"github.com/disciplinedware/declarion-sdk-go/errs"
 )
 
-// ImportPath is the package a call site must be calling into.
 const ImportPath = "github.com/disciplinedware/declarion-sdk-go/errs"
 
 // Finding is one call site the gate refuses.
 type Finding struct {
-	Pos     string // file:line
-	Code    string // the code named at the call site, empty when it is not a literal
+	Pos     string
+	Code    string // empty when the call site's code is not a literal
 	Message string
 }
 
@@ -46,21 +36,17 @@ func (f Finding) String() string {
 	return f.Pos + ": " + f.Code + ": " + f.Message
 }
 
-// Options narrows what Check reads.
 type Options struct {
-	// SkipDirs are directory NAMES pruned anywhere in the tree.
+	// Directory NAMES pruned anywhere below the root.
 	SkipDirs []string
-	// ExemptFields are member names permitted on any type - the platform's
-	// own container members, which no error type declares.
+	// Member names permitted on any type - the platform's own container
+	// members, which no error type declares.
 	ExemptFields []string
 }
 
 // Check walks every Go file under root and returns one Finding per refused
-// call site, sorted by position.
-//
-// An empty catalogue is itself a failure: a gate reporting ok having read
-// nothing is the cheapest possible lie, because every signal a reader would
-// check says fine.
+// call site, sorted by position. An empty catalogue is itself a failure: a
+// gate reporting ok having read nothing is the cheapest possible lie.
 func Check(root string, cat errs.Catalogue, opts Options) ([]Finding, error) {
 	if len(cat) == 0 {
 		return nil, fmt.Errorf("errscheck: empty catalogue - the gate read nothing and must not report ok")
@@ -83,16 +69,15 @@ func Check(root string, cat errs.Catalogue, opts Options) ([]Finding, error) {
 			return err
 		}
 		if d.IsDir() {
-			// The root is never pruned - a caller may point the gate at a
-			// fixture directory whose own name is on the skip list.
+			// Never prune the root: a caller may point the gate at a fixture
+			// directory whose own name is on the skip list.
 			if path != root && skip[d.Name()] {
 				return fs.SkipDir
 			}
 			return nil
 		}
-		// A test raising an undeclared type is the test that proves the
-		// undeclared-type fallback, so test files are out of scope. What
-		// ships is what the gate reads.
+		// A test proving the undeclared-type fallback has to raise one, so
+		// test files are out of scope.
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -115,7 +100,6 @@ func Check(root string, cat errs.Catalogue, opts Options) ([]Finding, error) {
 	return findings, nil
 }
 
-// importedAs returns the local name the file binds ImportPath to.
 func importedAs(file *ast.File, path string) (string, bool) {
 	for _, spec := range file.Imports {
 		p, err := strconv.Unquote(spec.Path.Value)
@@ -177,9 +161,8 @@ func checkFile(fset *token.FileSet, file *ast.File, pkgName string, cat errs.Cat
 func checkArgs(fset *token.FileSet, arg ast.Expr, pos, code string, def *errs.TypeDef, exempt map[string]bool) []Finding {
 	lit, ok := arg.(*ast.CompositeLit)
 	if !ok {
-		// A variable or a call result: the gate cannot read its keys, and
-		// refusing it would ban a legitimate shape. The declared member set
-		// is documentation the author still has.
+		// A variable or call result: unreadable keys, and refusing it would
+		// ban a legitimate shape.
 		return nil
 	}
 	var out []Finding

@@ -70,8 +70,8 @@ func TestCodeAndType(t *testing.T) {
 }
 
 func TestNewFillsStatusAndRetryabilityFromTheCatalogue(t *testing.T) {
-	errs.SetCatalogue(testCatalogue())
-	t.Cleanup(func() { errs.SetCatalogue(nil) })
+	errs.SetCatalogue(testCatalogue(), "en")
+	t.Cleanup(func() { errs.SetCatalogue(nil, "") })
 
 	e := errs.New("transport.stream_interrupted")
 	assert.Equal(t, "/errors/transport.stream_interrupted", e.Type)
@@ -80,7 +80,7 @@ func TestNewFillsStatusAndRetryabilityFromTheCatalogue(t *testing.T) {
 }
 
 func TestNewWithoutCatalogueStillWorks(t *testing.T) {
-	errs.SetCatalogue(nil)
+	errs.SetCatalogue(nil, "")
 
 	e := errs.New("swiftward-community.decision_locked", errs.Args{"channel_id": 7})
 	assert.Equal(t, "/errors/swiftward-community.decision_locked", e.Type)
@@ -189,7 +189,7 @@ func TestRoundTripSurvivesEveryMember(t *testing.T) {
 }
 
 func TestFrom(t *testing.T) {
-	errs.SetCatalogue(nil)
+	errs.SetCatalogue(nil, "")
 	typed := errs.New("entity.stale_object")
 
 	tests := []struct {
@@ -215,8 +215,8 @@ func TestFrom(t *testing.T) {
 }
 
 func TestIsAnswersRetryabilityFromTheDeclaredValue(t *testing.T) {
-	errs.SetCatalogue(testCatalogue())
-	t.Cleanup(func() { errs.SetCatalogue(nil) })
+	errs.SetCatalogue(testCatalogue(), "en")
+	t.Cleanup(func() { errs.SetCatalogue(nil, "") })
 
 	assert.True(t, errors.Is(errs.New("transport.stream_interrupted"), errs.ErrRetryable))
 	assert.False(t, errors.Is(errs.New("entity.stale_object"), errs.ErrRetryable))

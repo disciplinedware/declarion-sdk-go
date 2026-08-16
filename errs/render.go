@@ -2,35 +2,28 @@ package errs
 
 import "encoding/json"
 
-// DefaultMaxBytes bounds a serialized error object. It is the DEFAULT of the
-// `error_max_bytes` declared parameter, stated once here because the number
-// is shared across repositories and two engineers choosing their own would
-// produce a payload one side accepts and the other replaces.
+// DefaultMaxBytes is the default of the `error_max_bytes` parameter. Stated
+// here because the number is shared across repositories and two engineers
+// choosing their own would produce a payload one side accepts and the other
+// replaces.
 const DefaultMaxBytes = 16384
 
 // RenderContext is what a boundary knows and a producer does not.
 type RenderContext struct {
-	// Catalogue is the process catalogue this boundary renders from.
-	Catalogue Catalogue
-	// Locale is the caller's resolved locale.
-	Locale string
-	// DefaultLocale is the deployment fallback.
+	Catalogue     Catalogue
+	Locale        string
 	DefaultLocale string
-	// Instance identifies this occurrence to whoever answers for it. The
-	// caller decides its form; a producer's value is always discarded.
-	Instance string
-	// MaxBytes bounds the serialized object. Zero takes DefaultMaxBytes.
-	MaxBytes int
+	Instance      string
+	MaxBytes      int // zero takes DefaultMaxBytes
 }
 
-// Render produces the object a caller receives.
+// Render produces the object a caller receives, taking status, retryability
+// and title from the declaration and discarding whatever the producer put in
+// status, title and instance.
 //
-// It takes `status`, `retryable` and `title` from the declaration for this
-// type and discards whatever the producer put in `status`, `title` and
-// `instance` - the members a producer may read but never author. An error
-// whose type no module declares keeps its own identity and takes the
-// fallback rendering: the title of platform.undeclared_type, an EMPTY
-// detail, status 500 and retryable false, because nobody vetted that text.
+// An undeclared type keeps its own identity and takes the fallback: the
+// title of platform.undeclared_type, status 500, retryable false, and an
+// EMPTY detail, because nobody vetted that text.
 func Render(e *Error, rc RenderContext) *Error {
 	out := render(e, rc)
 	if fits(out, rc.MaxBytes) {
@@ -71,13 +64,12 @@ func render(e *Error, rc RenderContext) *Error {
 	return out
 }
 
-// Bounded is the one validate-or-replace: it answers e when the serialized
-// object fits, and a bounded replacement when it does not. Called at every
-// decode, render, persistence and emission boundary, because a locally
-// constructed oversized error never passes an ingress check.
+// Bounded is the one validate-or-replace, called at every decode, render,
+// persistence and emission boundary - a locally constructed oversized error
+// never passes an ingress check.
 //
-// Over the bound is a REPLACEMENT, never truncation in place: truncating a
-// structured object produces something that parses and lies.
+// Over the bound is a REPLACEMENT: truncating a structured object produces
+// something that parses and lies.
 func Bounded(e *Error, maxBytes int) *Error {
 	if e == nil || fits(e, maxBytes) {
 		return e
@@ -96,9 +88,8 @@ func fits(e *Error, maxBytes int) bool {
 	return len(b) <= maxBytes
 }
 
-// tooLarge is bounded by construction rather than by re-checking: the
-// offending type and nothing else, so the replacement can never itself
-// exceed a bound. The original survives as the logged cause.
+// Bounded by construction rather than by re-checking. The original survives
+// as the logged cause.
 func tooLarge(e *Error) *Error {
 	offending := e.Type
 	if len(offending) > OffendingTypeMaxBytes {

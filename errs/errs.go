@@ -1,21 +1,10 @@
-// Package errs is the one failure shape every Declarion path carries.
+// Package errs is the one failure shape every Declarion path carries, in
+// RFC 9457 form. A producer raises an occurrence; the party that answers a
+// caller calls Render, which recomputes status, title and instance from the
+// catalogue and discards whatever the producer put in them.
 //
-// The wire form is RFC 9457 "Problem Details for HTTP APIs": `type` is the
-// primary identifier, `status` is advisory and absent where no HTTP status
-// exists, and everything beyond the standard's five members is a declared
-// field serialized at the top level. Six carriers transport it - buffered
-// HTTP, the SSE terminal, JSON-RPC `error.data`, a batch item, an agent
-// frame and the NDJSON terminal - and none of them models errors its own
-// way.
-//
-// A producer raises an occurrence: the type, its safe detail, the values of
-// the members its type declares, and an operator-only cause. The party that
-// answers a caller renders it - Render recomputes `status`, `title` and
-// `instance` from the loaded catalogue and discards whatever the producer
-// put in them.
-//
-// See public/docs/api/rest-api.md for the wire contract and
-// public/docs/build/dsl.md for the `errors:` declaration.
+// Wire contract: public/docs/api/rest-api.md. Declaration:
+// public/docs/build/dsl.md.
 package errs
 
 import (
@@ -25,18 +14,17 @@ import (
 	"strings"
 )
 
-// ErrRetryable is the cross-package sentinel for "the same call can succeed
-// later". An Error answers it from its declared retryability, so the Go
-// classification and the wire member are one value read two ways.
+// ErrRetryable is the sentinel for "the same call can succeed later". An
+// Error answers it from its declared retryability, so errors.Is and the wire
+// member are one value read two ways.
 var ErrRetryable = errors.New("retryable error")
 
-// TypePrefix is the URI-reference prefix every declared type carries. The
-// published contract is the last segment - Code() - not the whole string, so
-// this prefix can move without breaking a consumer.
+// TypePrefix is what Code() strips. The published contract is the last
+// segment, never the whole string, so this prefix can move without breaking
+// a consumer.
 const TypePrefix = "/errors/"
 
-// TypeUnknown is RFC 9457's default `type` for a failure with no declared
-// identity.
+// TypeUnknown is RFC 9457's default for a failure with no declared identity.
 const TypeUnknown = "about:blank"
 
 // Codes this package raises itself. Every other code is written at its call
@@ -65,41 +53,37 @@ const OffendingTypeMaxBytes = 200
 // Error is any failure, on any path, in one shape.
 //
 // Status, Title and Instance are exported because every consumer must read
-// them; they are not authoritative across a boundary. Whoever answers a
-// caller recomputes all three from the declaration, so a producer that
-// assigns them changes nothing on the wire.
+// them, and are NOT authoritative across a boundary: Render recomputes all
+// three, so a producer that assigns them changes nothing on the wire.
 type Error struct {
-	Type      string `json:"type"`               // "/errors/<code>"; the identifier
-	Status    int    `json:"status,omitempty"`   // omitted when the carrier has no HTTP status
-	Title     string `json:"title"`              // what to show a person, in the caller's language
-	Detail    string `json:"detail,omitempty"`   // this occurrence; not localized
-	Instance  string `json:"instance,omitempty"` // platform-minted, never a producer's
-	Retryable bool   `json:"retryable"`          // always emitted; answered, never computed
+	Type      string `json:"type"`
+	Status    int    `json:"status,omitempty"` // absent where the carrier has no HTTP status
+	Title     string `json:"title"`
+	Detail    string `json:"detail,omitempty"` // this occurrence; not localized
+	Instance  string `json:"instance,omitempty"`
+	Retryable bool   `json:"retryable"` // always emitted
 
-	// Fields are the declared members of this type, serialized as top-level
-	// members per RFC 9457 rather than as a nested bag.
+	// Fields serialize as TOP-LEVEL members per RFC 9457, not a nested bag.
 	Fields map[string]any `json:"-"`
 
-	// cause is the operator's error: logged, and unmarshalable by
-	// construction so no later call site can serialize it by forgetting to.
+	// Operator-only. Unexported so no call site can serialize it by
+	// forgetting to.
 	cause error
 }
 
 // Args carries the VALUES of the members a type declares. Nothing is ever
-// substituted into a title; a member is structured data for whoever reads it.
+// substituted into a title.
 type Args map[string]any
 
-// New raises an occurrence of the declared type `code`, written exactly as
-// the YAML declares it.
+// New raises an occurrence of `code`, spelled as the YAML declares it.
 //
-// Status and Retryable come from the process catalogue when one is loaded;
-// a sidecar answering Declarion deliberately loads none and Declarion fills
-// both as it renders. Title is never filled here - it needs a caller's
-// locale, which a raise site does not have.
+// Status and Retryable come from the process catalogue when one is loaded; a
+// sidecar answering Declarion loads none and Declarion fills both as it
+// renders. Title needs a caller's locale, which a raise site does not have.
 //
-// At most one Args is legal. A second is a programming error the call-site
-// gate rejects at build time; merging them would make two maps mean one
-// thing and discarding one would make it mean nothing, so this panics.
+// Panics on a second Args: merging would make two maps mean one thing and
+// discarding would make one mean nothing. The call-site gate catches it at
+// build time.
 func New(code string, args ...Args) *Error {
 	if len(args) > 1 {
 		panic("errs.New(" + code + "): at most one Args is legal")
@@ -118,22 +102,21 @@ func New(code string, args ...Args) *Error {
 	return e
 }
 
-// Because attaches the operator's cause. It is logged and never serialized.
+// Because attaches the operator's cause, which is never serialized.
 func (e *Error) Because(err error) *Error {
 	e.cause = err
 	return e
 }
 
-// Detail attaches a diagnostic line describing THIS occurrence. It exists
-// for what neither the type nor its members can say, so writing one is a
-// deliberate act rather than the default call.
+// WithDetail attaches a diagnostic line for what neither the type nor its
+// members can say. A chain method so writing one is a decision.
 func (e *Error) WithDetail(s string) *Error {
 	e.Detail = s
 	return e
 }
 
-// Error is the OPERATOR's string: it carries the cause. Never write it to a
-// wire - the wire carries Title and Detail, both of which a producer vetted.
+// Error is the OPERATOR's string and carries the cause. Never write it to a
+// wire; the wire carries Title and Detail, which a producer vetted.
 func (e *Error) Error() string {
 	var b strings.Builder
 	b.WriteString(e.Code())
@@ -152,19 +135,14 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-// Unwrap reaches the operator's cause, so errors.Is and errors.As still
-// answer for whatever the producer wrapped.
 func (e *Error) Unwrap() error { return e.cause }
 
-// Is answers the retryability sentinel from the declared value, so
-// errors.Is(err, ErrRetryable) and the wire member are one fact.
 func (e *Error) Is(target error) bool {
 	return target == ErrRetryable && e.Retryable
 }
 
-// Code is the identifier a consumer compares: the last path segment of Type,
-// identical in every deployment. It is a method rather than a second field so
-// the identifier has exactly one stored home.
+// Code is the identifier a consumer compares, identical in every deployment.
+// A method rather than a field so it cannot drift from Type.
 func (e *Error) Code() string {
 	if e.Type == "" || e.Type == TypeUnknown {
 		return ""
@@ -175,14 +153,13 @@ func (e *Error) Code() string {
 	return e.Type
 }
 
-// Ext reads a declared member.
 func (e *Error) Ext(key string) (any, bool) {
 	v, ok := e.Fields[key]
 	return v, ok
 }
 
-// ExtInt reads a declared member declared as an integer, across the forms
-// JSON decoding produces. Every consumer would otherwise write this switch.
+// ExtInt reads an integer member across the forms JSON decoding produces, so
+// no consumer writes this switch.
 func (e *Error) ExtInt(key string) (int, bool) {
 	v, ok := e.Fields[key]
 	if !ok {
@@ -205,15 +182,13 @@ func (e *Error) ExtInt(key string) (int, bool) {
 	return 0, false
 }
 
-// ExtString reads a declared member declared as a string.
 func (e *Error) ExtString(key string) (string, bool) {
 	s, ok := e.Fields[key].(string)
 	return s, ok
 }
 
-// From walks the wrapped chain for an Error. It answers false for a plain
-// error and for nil, so a caller never reads an empty type as a successful
-// lookup.
+// From walks the wrapped chain. False for a plain error and for nil, so a
+// caller never reads an empty type as a successful lookup.
 func From(err error) (*Error, bool) {
 	var e *Error
 	if errors.As(err, &e) && e != nil {
@@ -222,9 +197,8 @@ func From(err error) (*Error, bool) {
 	return nil, false
 }
 
-// knownMembers are the members Error stores in its own fields. A declared
-// field carrying one of these names never overwrites them; the call-site
-// gate rejects the declaration that would.
+// A field named after one of these never overwrites it; the call-site gate
+// rejects the declaration that would.
 var knownMembers = map[string]bool{
 	"type": true, "status": true, "title": true,
 	"detail": true, "instance": true, "retryable": true,
@@ -291,16 +265,12 @@ func (e *Error) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// codePattern is con-one-spelling: <owner>.<name>, where <owner> is a module
-// manifest name (hyphens included, verbatim) and <name> is lower_snake.
+// <owner>.<name>: an owner is a module manifest name, hyphens verbatim.
 var codePattern = regexp.MustCompile(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9_]*$`)
 
-// ValidCode reports whether code is spelled the one way every error type is.
 func ValidCode(code string) bool { return codePattern.MatchString(code) }
 
-// memberPattern is RFC 9457 Section 4: start with a letter, ALPHA/DIGIT/`_`,
-// three characters or longer.
+// RFC 9457 Section 4: letter first, ALPHA/DIGIT/_, three characters or more.
 var memberPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{2,}$`)
 
-// ValidMemberName reports whether name is a legal declared-field name.
 func ValidMemberName(name string) bool { return memberPattern.MatchString(name) }
