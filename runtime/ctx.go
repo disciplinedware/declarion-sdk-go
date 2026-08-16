@@ -48,6 +48,13 @@ type HandlerCtx struct {
 	// Populated from the reserved `_object_ids` JSON-RPC param.
 	ObjectIDs []string
 
+	// Locale is the caller's resolved language code (e.g. "en", "ru"), the one
+	// the platform already decided for this request. Populated from the
+	// reserved `_locale` JSON-RPC param, empty when the platform sent none. A
+	// handler rendering its own text uses this rather than resolving a language
+	// again and reaching a different answer.
+	Locale string
+
 	// Baggage is the W3C baggage header value propagated from the platform.
 	Baggage string
 

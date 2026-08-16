@@ -337,6 +337,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		IsGlobalUser:  isGlobalUser,
 		EntityCode:    reserved.EntityCode,
 		ObjectIDs:     reserved.ObjectIDs,
+		Locale:        reserved.Locale,
 		Baggage:       baggage,
 	}
 
@@ -525,6 +526,7 @@ func writeHandlerError(w http.ResponseWriter, id, method string, err error, cfg 
 type reservedParams struct {
 	EntityCode string
 	ObjectIDs  []string
+	Locale     string
 }
 
 // extractReservedParams pulls platform-reserved metadata from JSON-RPC params
@@ -556,6 +558,9 @@ func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage
 		return out, raw, err
 	}
 	if err := unmarshalReserved("_object_ids", &out.ObjectIDs); err != nil {
+		return out, raw, err
+	}
+	if err := unmarshalReserved("_locale", &out.Locale); err != nil {
 		return out, raw, err
 	}
 	// Fail closed on any remaining reserved-prefixed key.

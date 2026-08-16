@@ -118,6 +118,30 @@ func TestMarshalPutsDeclaredFieldsAtTheTopLevel(t *testing.T) {
 	assert.Equal(t, false, m["retryable"], "retryable is always emitted, never absent")
 }
 
+func TestMarshalOmitsTheBoundaryMembersAStoredOccurrenceNeverHas(t *testing.T) {
+	errs.SetCatalogue(testCatalogue(), "en")
+	t.Cleanup(func() { errs.SetCatalogue(nil, "") })
+
+	raised := errs.New("transport.stream_interrupted").WithDetail("upstream closed")
+	b, err := json.Marshal(raised)
+	require.NoError(t, err)
+	stored := map[string]any{}
+	require.NoError(t, json.Unmarshal(b, &stored))
+	assert.NotContains(t, stored, "title")
+	assert.NotContains(t, stored, "status")
+	assert.NotContains(t, stored, "instance")
+	assert.Equal(t, "upstream closed", stored["detail"])
+
+	b, err = json.Marshal(errs.Render(raised, errs.RenderContext{
+		Catalogue: testCatalogue(), Locale: "en", Instance: "/requests/r1",
+	}))
+	require.NoError(t, err)
+	rendered := map[string]any{}
+	require.NoError(t, json.Unmarshal(b, &rendered))
+	assert.Equal(t, "The connection broke before the answer finished.", rendered["title"])
+	assert.Equal(t, "/requests/r1", rendered["instance"])
+}
+
 func TestMarshalNeverSerializesTheCause(t *testing.T) {
 	const sentinel = `relation "declarion.users" does not exist`
 	e := errs.New("entity.stale_object").Because(errors.New(sentinel))
@@ -340,4 +364,21 @@ func TestValidMemberName(t *testing.T) {
 			assert.Equal(t, tt.want, errs.ValidMemberName(tt.member))
 		})
 	}
+}
+
+// A nil *Error inside a non-nil interface is a shape errors.Is and errors.As
+// walk into while looking for something else. The chain-walking methods must
+// not take the process down on a path that has nothing to do with this error.
+func TestANilErrorTravellingAsAnErrorDoesNotPanic(t *testing.T) {
+	var absent *errs.Error
+	var asErr error = absent
+
+	assert.NotPanics(t, func() {
+		_ = errors.Unwrap(asErr)
+		_ = errors.Is(asErr, errs.ErrRetryable)
+		var target *errs.Error
+		_ = errors.As(asErr, &target)
+		_ = absent.Error()
+		_ = absent.Code()
+	})
 }

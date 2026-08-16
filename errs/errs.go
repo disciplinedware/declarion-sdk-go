@@ -77,9 +77,11 @@ type Args map[string]any
 
 // New raises an occurrence of `code`, spelled as the YAML declares it.
 //
-// Status and Retryable come from the process catalogue when one is loaded; a
-// sidecar answering Declarion loads none and Declarion fills both as it
-// renders. Title needs a caller's locale, which a raise site does not have.
+// Retryable comes from the process catalogue when one is loaded, so a raise
+// site can answer ErrRetryable before any boundary; a sidecar answering
+// Declarion loads none and Declarion fills it as it renders. Status, title and
+// instance describe a boundary and are filled only there - a raise site has no
+// caller locale, no request, and no answer it is writing.
 //
 // Panics on a second Args: merging would make two maps mean one thing and
 // discarding would make one mean nothing. The call-site gate catches it at
@@ -96,7 +98,6 @@ func New(code string, args ...Args) *Error {
 		}
 	}
 	if def, ok := catalogue().Lookup(code); ok {
-		e.Status = def.Status
 		e.Retryable = def.Retryable
 	}
 	return e
@@ -117,7 +118,15 @@ func (e *Error) WithDetail(s string) *Error {
 
 // Error is the OPERATOR's string and carries the cause. Never write it to a
 // wire; the wire carries Title and Detail, which a producer vetted.
+//
+// Nil-safe, like the three methods below it: this type travels as an `error`,
+// and a nil pointer inside a non-nil interface is a shape errors.Is and
+// errors.As walk into while looking for something else. Panicking there takes
+// the process down on a path that has nothing to do with this error.
 func (e *Error) Error() string {
+	if e == nil {
+		return ""
+	}
 	var b strings.Builder
 	b.WriteString(e.Code())
 	switch {
@@ -135,16 +144,21 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-func (e *Error) Unwrap() error { return e.cause }
+func (e *Error) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
 
 func (e *Error) Is(target error) bool {
-	return target == ErrRetryable && e.Retryable
+	return e != nil && target == ErrRetryable && e.Retryable
 }
 
 // Code is the identifier a consumer compares, identical in every deployment.
 // A method rather than a field so it cannot drift from Type.
 func (e *Error) Code() string {
-	if e.Type == "" || e.Type == TypeUnknown {
+	if e == nil || e.Type == "" || e.Type == TypeUnknown {
 		return ""
 	}
 	if i := strings.LastIndexByte(e.Type, '/'); i >= 0 {
@@ -213,10 +227,15 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 		m[k] = v
 	}
 	m["type"] = e.Type
+	// Status, title and instance describe a boundary, and a raised error has
+	// none of them until Render fills them - which is what makes a STORED
+	// occurrence the fact and never one caller's sentence.
 	if e.Status != 0 {
 		m["status"] = e.Status
 	}
-	m["title"] = e.Title
+	if e.Title != "" {
+		m["title"] = e.Title
+	}
 	if e.Detail != "" {
 		m["detail"] = e.Detail
 	}
