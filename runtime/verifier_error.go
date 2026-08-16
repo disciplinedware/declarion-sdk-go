@@ -64,7 +64,7 @@ func (e *VerifierError) wire() (*errs.Error, int) {
 	code, rpc := CodeVerifierUnavailable, JSONRPCInternalError
 	switch e.Outcome {
 	case VerifierRejected:
-		code, rpc = CodeVerifierRejected, JSONRPCAppError
+		code, rpc = CodeVerifierRejected, JSONRPCServerError
 	case VerifierInvalidRequest:
 		code, rpc = CodeVerifierInvalidRequest, JSONRPCInvalidParams
 	}

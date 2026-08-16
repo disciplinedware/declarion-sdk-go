@@ -43,7 +43,9 @@ const (
 	JSONRPCMethodNotFound = -32601
 	JSONRPCInvalidParams  = -32602
 	JSONRPCInternalError  = -32603
-	JSONRPCAppError       = -32000
+	// -32000 to -32099 are JSON-RPC 2.0 §5.1's implementation-defined server
+	// errors: what the protocol has for a failure it reserves no number for.
+	JSONRPCServerError = -32000
 )
 
 // JSONRPCCodeFor derives the numeric JSON-RPC code from the failure's TYPE.
@@ -51,7 +53,7 @@ const (
 // Mechanical, and deliberately not a judgement: the number is a protocol
 // artefact the transport wants, and the identity a consumer branches on is
 // `data.type`. Only the three situations JSON-RPC itself reserves a number for
-// get one; everything else is an application error.
+// get one; everything else takes the protocol's server-error number.
 func JSONRPCCodeFor(e *errs.Error) int {
 	switch e.Code() {
 	case "action.invalid_params", "platform.invalid_body_shape", "platform.bad_request":
@@ -61,7 +63,7 @@ func JSONRPCCodeFor(e *errs.Error) int {
 	case "platform.invalid_body", "platform.read_body_failed", "platform.body_too_large":
 		return JSONRPCParseError
 	}
-	return JSONRPCAppError
+	return JSONRPCServerError
 }
 
 // NewErrorResponse answers with one failure object.

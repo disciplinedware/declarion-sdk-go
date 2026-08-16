@@ -230,7 +230,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	// Check protocol version (now req.ID is available for error correlation).
 	protoVer := r.Header.Get("X-Declarion-Protocol-Version")
 	if protoVer != "" && protoVer != ProtocolVersion {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
 			errs.New("transport.protocol_mismatch", errs.Args{"expected": ProtocolVersion, "got": protoVer})))
 		return
 	}
@@ -258,7 +258,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 
 	// Enforce RequireToken: reject requests without a valid bearer token.
 	if cfg.RequireToken && token == "" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError, errs.New("auth.unauthorized")))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.unauthorized")))
 		return
 	}
 
@@ -272,7 +272,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		claims, err := parseHandlerToken(token, cfg.JWTSecret)
 		if err != nil {
 			cfg.Logger.Warn("invalid continuation token", zap.Error(err), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError, errs.New("auth.invalid_token")))
+			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token")))
 			return
 		}
 		// Exact-method binding (defense-in-depth): a token minted for one
@@ -280,7 +280,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		// (older Core mints omit the method claim).
 		if claims.Method != "" && claims.Method != req.Method {
 			cfg.Logger.Warn("handler token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError, errs.New("auth.invalid_token").WithDetail("token method mismatch")))
+			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token").WithDetail("token method mismatch")))
 			return
 		}
 		tenantID = claims.TenantID
@@ -354,14 +354,14 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 // built ONLY from an optional run-as credential header - never the call token.
 func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config, req *Request, token string) {
 	if cfg.JWTSecret == "" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
 			errs.New("auth.unauthorized").WithDetail("verifier methods require signed tokens")))
 		return
 	}
 	claims, err := parseVerifierToken(token, cfg.JWTSecret)
 	if err != nil {
 		cfg.Logger.Warn("invalid verifier token", zap.Error(err), zap.String("method", req.Method))
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
 			errs.New("auth.invalid_token").WithDetail("invalid verifier token")))
 		return
 	}
@@ -369,7 +369,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 	// one verifier method.
 	if claims.Method != req.Method {
 		cfg.Logger.Warn("verifier token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCAppError,
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
 			errs.New("auth.invalid_token").WithDetail("token method mismatch")))
 		return
 	}

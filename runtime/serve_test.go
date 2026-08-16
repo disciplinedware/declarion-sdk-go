@@ -162,7 +162,7 @@ func TestHandleRPC_protocol_version_mismatch(t *testing.T) {
 	var rpcResp Response
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
-	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
+	assert.Equal(t, JSONRPCServerError, rpcResp.Error.Code)
 	assert.Equal(t, "transport.protocol_mismatch", rpcResp.Error.Data.Code())
 	assert.Equal(t, "req-1", rpcResp.ID)
 }
@@ -186,7 +186,7 @@ func TestHandleRPC_handler_error(t *testing.T) {
 	var rpcResp Response
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
-	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
+	assert.Equal(t, JSONRPCServerError, rpcResp.Error.Code)
 	assert.Equal(t, "platform.external_service_error", rpcResp.Error.Data.Code())
 	assert.Equal(t, "ClickUp API 429", rpcResp.Error.Data.Detail)
 	assert.Empty(t, rpcResp.Error.Data.Title,
@@ -237,7 +237,7 @@ func TestHandleRPC_invalid_token(t *testing.T) {
 	var rpcResp Response
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
-	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
+	assert.Equal(t, JSONRPCServerError, rpcResp.Error.Code)
 	assert.Contains(t, []string{"auth.unauthorized", "auth.invalid_token"}, rpcResp.Error.Data.Code())
 }
 
@@ -317,7 +317,7 @@ func TestHandleRPC_require_token_rejects_unauthenticated(t *testing.T) {
 	var rpcResp Response
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
-	assert.Equal(t, JSONRPCAppError, rpcResp.Error.Code)
+	assert.Equal(t, JSONRPCServerError, rpcResp.Error.Code)
 	assert.Contains(t, []string{"auth.unauthorized", "auth.invalid_token"}, rpcResp.Error.Data.Code())
 }
 

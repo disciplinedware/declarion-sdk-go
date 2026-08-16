@@ -265,8 +265,8 @@ func (s *ActionStream) finish(err error) {
 	s.done = true
 }
 
-// finishTerminal decodes the declarion.stream.end envelope: success -> clean
-// end (Err nil); error -> *StreamError.
+// finishTerminal decodes the declarion.stream.end event: success leaves Err
+// nil, a failure sets the error object the terminal carried.
 func (s *ActionStream) finishTerminal(data []byte) {
 	var env streamEndEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {

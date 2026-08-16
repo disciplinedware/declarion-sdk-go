@@ -18,7 +18,7 @@ import (
 //
 //   - Platform reports no value  -> (def, nil). No error.
 //
-//   - Coercion or transport err  -> (zero, AppError{CodeInternal}). The
+//   - Coercion or transport err  -> (zero, platform.internal_error). The
 //     returned error is already final and code-tagged ("resolve parameter
 //     "X": ..."); callers MUST propagate it as-is (return err) - never
 //     re-wrap with the parameter name, that only duplicates it.
@@ -40,7 +40,7 @@ func GetParam[T any](ctx *HandlerCtx, code string, def T) (T, error) {
 // it is "", 0, or false - those are valid configured values, never treated as
 // absence (this is why the check is found-based, not empty-based). The two
 // failure modes - the fetch failing (transport / platform unreachable) and
-// the value being absent - both return a final, code-tagged AppError; the
+// the value being absent - both return a typed failure; the
 // caller propagates it as-is.
 //
 //	token, err := runtime.GetRequiredParam[string](ctx, "clickup_api_token")
