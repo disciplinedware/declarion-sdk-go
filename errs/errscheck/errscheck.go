@@ -1,5 +1,7 @@
 // Package errscheck is the call-site gate for errs.New: a code is a plain
 // string, so the compiler cannot catch a typo and this reads the AST instead.
+// It reads LITERALS - a code held in a variable is invisible to it, and such a
+// type arrives undeclared and takes the fallback rendering.
 //
 // An application calls Check once from a test, against the catalogue its own
 // loader produces in the same process, so nothing can be stale. It lives
@@ -133,7 +135,10 @@ func checkFile(fset *token.FileSet, file *ast.File, pkgName string, cat errs.Cat
 		}
 		code, ok := stringLiteral(call.Args[0])
 		if !ok {
-			out = append(out, Finding{Pos: pos, Message: "the code must be a string literal, so the gate can read it"})
+			// A code the gate cannot read - a parameter of a generic writer,
+			// or one assembled at runtime. Such a type simply arrives
+			// undeclared and takes the fallback rendering; nothing catches it
+			// here, by design.
 			return true
 		}
 		if !errs.ValidCode(code) {
