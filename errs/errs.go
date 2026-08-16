@@ -167,6 +167,20 @@ func (e *Error) Code() string {
 	return e.Type
 }
 
+// IsNilError reports the trap Go has no syntax against: a nil *Error handed
+// over as a non-nil `error`. Every caller holding the concrete type and
+// returning it as `error` says "nothing failed", and the interface does not
+// agree - read as a failure it records one that never happened, and every
+// classifier below it dereferences a nil.
+//
+// The DIRECT dynamic type only. errors.As would also match a nil *Error found
+// by unwrapping something non-nil, and a wrapper existing means something DID
+// fail.
+func IsNilError(err error) bool {
+	e, ok := err.(*Error)
+	return ok && e == nil
+}
+
 // HasCode reports whether err carries this declared type anywhere in its
 // wrapped chain. The one way a consumer branches on identity.
 func HasCode(err error, code string) bool {
