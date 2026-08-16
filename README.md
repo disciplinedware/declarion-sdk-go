@@ -305,18 +305,75 @@ external platform.
 
 ## Error handling
 
-Return `*runtime.AppError` for structured JSON-RPC errors:
+A failure is ONE object, RFC 9457's problem details, and it is the same object
+on every carrier: a buffered HTTP body, an SSE terminal event, a batch item, a
+JSON-RPC `error.data`. Nothing is generated - a call site writes the code its
+YAML declares.
+
+### 1. Declare the type
+
+In your module's schema, under `errors:`. The key is `<module>.<name>`, where
+`<module>` is your `manifest.yaml` `name:` verbatim:
+
+```yaml
+errors:
+  clickup.rate_limited:
+    status: 429
+    retryable: true
+    fields:
+      retry_after: integer
+    title:
+      en: "ClickUp is rate-limiting this workspace."
+```
+
+`status` and `retryable` belong to the TYPE and no occurrence overrides them.
+Where retryability genuinely differs, the FAILURE differs and deserves its own
+type - a provider throttling you and a provider refusing you for an empty
+balance are two things a caller wants to tell apart anyway.
+
+### 2. Raise it
 
 ```go
-return result, &sdk.AppError{
-    Code:          sdk.JSONRPCAppError,
-    Message:       "ClickUp API rate limit",
-    DeclarionCode: sdk.CodeRateLimited,
-    Retryable:     true,
+return result, errs.New("clickup.rate_limited", errs.Args{"retry_after": 30})
+```
+
+`errs.New` takes at most one `Args`, and every key must be declared under that
+type's `fields:`. Nothing else is set at the raise site: `status`, `retryable`
+and `title` come from the declaration when Declarion renders the response, so a
+handler never guesses any of them.
+
+`detail` is the one thing a raise site adds, and it is rare - it describes THIS
+occurrence and exists for what neither the type nor its members can say:
+
+```go
+return result, errs.New("clickup.rate_limited").
+    WithDetail("list 4021 exceeded its per-minute budget").
+    Because(err)   // the operator's cause; never serialized
+```
+
+An error your module does not declare keeps its identity and takes a fallback
+rendering with an empty detail, plus a warning naming it. Any other `error`
+becomes `action.failed`.
+
+### 3. Read one
+
+```go
+if errs.HasCode(err, "entity.not_found") { ... }          // branch on identity
+
+if e, ok := errs.From(err); ok {
+    e.Code()                          // "entity.stale_object" - identical everywhere
+    e.Retryable                       // filled by the boundary that rendered it
+    n, ok := e.ExtInt("row_version")  // a declared member, read the one way
 }
 ```
 
-Any other `error` maps to `INTERNAL_ERROR`.
+Branch on `Code()`, never on the whole `type` string: the prefix is a
+deployment's to change, the last segment is the contract. And never on the
+status - one status covers a caller fault and a transient fault alike, which is
+what `retryable` is for.
+
+For a call you made INTO the platform, `platform.StatusOf(err)` and
+`platform.IsNotFound(err)` answer the two questions a client usually has.
 
 ## Conformance test suite
 
