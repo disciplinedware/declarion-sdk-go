@@ -655,10 +655,3 @@ func decodeActionResult(raw json.RawMessage, into any) error {
 	}
 	return json.Unmarshal(raw, into)
 }
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return strings.TrimSpace(s[:max]) + "..."
-}

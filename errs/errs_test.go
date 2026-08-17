@@ -92,7 +92,7 @@ func TestNewWithoutCatalogueStillWorks(t *testing.T) {
 
 func TestNewRejectsASecondArgs(t *testing.T) {
 	assert.Panics(t, func() {
-		errs.New("entity.stale_object", errs.Args{"a": 1}, errs.Args{"b": 2})
+		_ = errs.New("entity.stale_object", errs.Args{"a": 1}, errs.Args{"b": 2})
 	})
 }
 
