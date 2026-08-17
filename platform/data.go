@@ -167,12 +167,12 @@ func (d *DataClient) Get(ctx context.Context, entity string, pk map[string]any) 
 	for field, value := range pk {
 		q.Set(field, fmt.Sprint(value))
 	}
-	body, status, err := d.c.do(ctx, "GET", path, q, nil, d.request...)
+	body, status, contentType, err := d.c.do(ctx, "GET", path, q, nil, d.request...)
 	if err != nil {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, errorFromResponse(status, body, path)
+		return nil, errorFromResponse(status, body, path, contentType)
 	}
 	var envelope struct {
 		Data map[string]any `json:"data"`
@@ -240,12 +240,12 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 	}
 
 	path := fmt.Sprintf("/api/data/%s", entity)
-	body, status, err := d.c.do(ctx, "GET", path, q, nil, d.request...)
+	body, status, contentType, err := d.c.do(ctx, "GET", path, q, nil, d.request...)
 	if err != nil {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, errorFromResponse(status, body, path)
+		return nil, errorFromResponse(status, body, path, contentType)
 	}
 	var result ListResponse
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -631,12 +631,12 @@ type actionEnvelope struct {
 // dispatchWrite POSTs the FLAT action body and returns the parsed action
 // envelope. Non-2xx surfaces as APIError with body truncated.
 func (d *DataClient) dispatchWrite(ctx context.Context, path string, body map[string]any) (actionEnvelope, error) {
-	respBody, status, err := d.c.do(ctx, "POST", path, nil, body, d.request...)
+	respBody, status, contentType, err := d.c.do(ctx, "POST", path, nil, body, d.request...)
 	if err != nil {
 		return actionEnvelope{}, err
 	}
 	if status < 200 || status >= 300 {
-		return actionEnvelope{}, errorFromResponse(status, respBody, path)
+		return actionEnvelope{}, errorFromResponse(status, respBody, path, contentType)
 	}
 	var envelope actionEnvelope
 	if err := json.Unmarshal(respBody, &envelope); err != nil {

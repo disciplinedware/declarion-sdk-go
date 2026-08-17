@@ -87,6 +87,7 @@ func TestInvokeStreaming_PreStartNon2xx(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
+		w.Header().Set("Content-Type", ProblemContentType)
 		_, _ = io.WriteString(w, `{"type":"/errors/action.failed","title":"nope","retryable":false}`)
 	}))
 	t.Cleanup(srv.Close)
@@ -200,7 +201,7 @@ func TestParser_FailClosedCases(t *testing.T) {
 		{"oversize_event", startBlock + dataBlock(strings.Repeat("x", 200)) + endSuccess, 64, "exceeds"},
 		{"unknown_control", startBlock + "event: declarion.stream.middle\ndata: {}\n\n" + endSuccess, MaxStreamEventSize, "unknown control"},
 		{"second_start", startBlock + startBlock + endSuccess, MaxStreamEventSize, "second start"},
-		{"eof_before_terminal", startBlock + dataBlock("frame-0"), MaxStreamEventSize, "EOF before terminal"},
+		{"eof_before_terminal", startBlock + dataBlock("frame-0"), MaxStreamEventSize, TypeStreamInterrupted},
 		{"unknown_terminal_status", startBlock + "event: declarion.stream.end\ndata: {\"status\":\"weird\"}\n\n", MaxStreamEventSize, "unknown terminal status"},
 	}
 	for _, tc := range cases {
@@ -348,5 +349,96 @@ func TestActionStream_ContextCancellation(t *testing.T) {
 	}
 	if !errors.Is(s.Err(), context.Canceled) {
 		t.Errorf("Err must be context.Canceled, got %v", s.Err())
+	}
+}
+
+// Every way a stream can fail to parse answers a DECLARED type, so a consumer
+// branches on identity instead of reading text. It did not: five exits returned
+// a plain Go error, and the only way to tell them from a platform failure was
+// a string match.
+func TestEveryUnreadableStreamAnswersOneDeclaredType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"no start event", dataBlock("frame-0") + endSuccess},
+		{"start metadata that is not JSON", "event: declarion.stream.start\ndata: not-json\n\n" + endSuccess},
+		{"a second start event", startBlock + startBlock + endSuccess},
+		{"an unknown control event", startBlock + "event: declarion.stream.sideways\ndata: {}\n\n" + endSuccess},
+		{"a terminal this client cannot read", startBlock + "event: declarion.stream.end\ndata: not-json\n\n"},
+		{"an unknown terminal status", startBlock + `event: declarion.stream.end` + "\n" + `data: {"status":"sideways"}` + "\n\n"},
+		{"a terminal error with no object", startBlock + `event: declarion.stream.end` + "\n" + `data: {"status":"error"}` + "\n\n"},
+		{"an unrecognized SSE line", startBlock + "sideways: x\n\n" + endSuccess},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := streamClient(t, sseServer(t, tc.body))
+			s, err := c.Actions().InvokeStreaming(context.Background(), "e2e.stream_echo", InvokeParams{})
+			if err == nil {
+				defer func() { _ = s.Close() }()
+				_, err = parseStream(s)
+			}
+			if err == nil {
+				t.Fatal("an unreadable stream must fail")
+			}
+			e, ok := errs.From(err)
+			if !ok {
+				t.Fatalf("err = %v (%T), want a declared error object", err, err)
+			}
+			if e.Code() != TypeStreamUnreadable {
+				t.Errorf("code = %q, want %q", e.Code(), TypeStreamUnreadable)
+			}
+			if e.Retryable {
+				t.Error("the peer will answer the same way again, so retrying spends the work twice")
+			}
+		})
+	}
+}
+
+// The wrong media type is refused before a stream object exists, and answers
+// the same type: from a consumer's side it is the same fact.
+func TestAStreamThatIsNotAStreamAnswersTheSameType(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"status":"success"}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	_, err := streamClient(t, srv).Actions().InvokeStreaming(context.Background(), "e2e.stream_echo", InvokeParams{})
+	e, ok := errs.From(err)
+	if !ok {
+		t.Fatalf("err = %v (%T), want a declared error object", err, err)
+	}
+	if e.Code() != TypeStreamUnreadable {
+		t.Errorf("code = %q, want %q", e.Code(), TypeStreamUnreadable)
+	}
+}
+
+// This client's OWN bound is its own type, not the peer's fault: the consumer's
+// move is to raise MaxEventBytes, and the number to raise it to travels.
+func TestAnOversizedEventNamesTheBoundItBroke(t *testing.T) {
+	body := startBlock + dataBlock(strings.Repeat("x", 4096)) + endSuccess
+	c := streamClient(t, sseServer(t, body))
+
+	s, err := c.Actions().InvokeStreaming(context.Background(), "e2e.stream_echo", InvokeParams{})
+	if err != nil {
+		t.Fatalf("InvokeStreaming: %v", err)
+	}
+	defer func() { _ = s.Close() }()
+	s.maxEventBytes = 512
+
+	if _, err = parseStream(s); err == nil {
+		t.Fatal("an event over the bound must fail")
+	}
+	e, ok := errs.From(err)
+	if !ok {
+		t.Fatalf("err = %v (%T), want a declared error object", err, err)
+	}
+	if e.Code() != TypeStreamEventTooLarge {
+		t.Fatalf("code = %q, want %q", e.Code(), TypeStreamEventTooLarge)
+	}
+	limit, ok := e.ExtInt(FieldLimitBytes)
+	if !ok || limit != 512 {
+		t.Errorf("limit_bytes = %v (present=%v), want 512", limit, ok)
 	}
 }

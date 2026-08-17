@@ -44,9 +44,9 @@ func handleEcho(ctx *runtime.HandlerCtx, p echoParams) (echoResult, error) {
 type errorParams struct{}
 
 func handleError(ctx *runtime.HandlerCtx, _ errorParams) (any, error) {
-	// A handler declaring its OWN type, which is what the harness asserts
-	// crosses the boundary unchanged.
-	return nil, errs.New("platform.external_service_error").WithDetail("conformance test error")
+	// A handler declaring its OWN type and its OWN member, which is what the
+	// harness asserts crosses the boundary unchanged.
+	return nil, errs.New("platform.external_service_error", errs.Args{"upstream_status": 503})
 }
 
 type callbackParams struct {
@@ -59,7 +59,7 @@ type callbackResult struct {
 
 func handleCallback(ctx *runtime.HandlerCtx, p callbackParams) (callbackResult, error) {
 	if p.CallbackURL == "" {
-		return callbackResult{}, errs.New("action.invalid_params").WithDetail("callback_url is required")
+		return callbackResult{}, errs.New("action.invalid_params", errs.Args{"param": "callback_url"})
 	}
 
 	// Use ctx.Platform directly - it auto-attaches auth, traceparent, and baggage headers.

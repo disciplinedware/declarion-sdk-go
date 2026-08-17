@@ -157,7 +157,7 @@ func TestVerifierDispatch_MethodMismatch(t *testing.T) {
 	RegisterVerifier(telegramVerifier, func(c *VerifierCtx) (VerifierResult, error) {
 		return VerifierResult{}, nil
 	})
-	srv := setupTestServer(t)
+	srv, logs := setupTestServerObservingLogs(t)
 	defer srv.Close()
 
 	// Token authorizes a DIFFERENT method than the request calls.
@@ -165,7 +165,8 @@ func TestVerifierDispatch_MethodMismatch(t *testing.T) {
 	body := externalEnvelopeBody("req-1", telegramVerifier, `{}`)
 	resp := postRPC(t, srv.URL, body, map[string]string{"Authorization": "Bearer " + token})
 	require.NotNil(t, resp.Error)
-	assert.Contains(t, resp.Error.Message, "method mismatch")
+	assert.Equal(t, "auth.invalid_token", resp.Error.Message)
+	assert.Contains(t, loggedReason(t, logs), "method mismatch")
 }
 
 func TestVerifierToken_OnHandlerMethod_Rejected(t *testing.T) {
@@ -222,7 +223,7 @@ func TestVerifierDispatch_UnsignedRefused(t *testing.T) {
 	body := externalEnvelopeBody("req-1", telegramVerifier, `{}`)
 	resp := postRPC(t, srv.URL, body, map[string]string{"Authorization": "Bearer " + token})
 	require.NotNil(t, resp.Error)
-	assert.Contains(t, resp.Error.Message, "require signed tokens")
+	assert.Equal(t, "auth.unauthorized", resp.Error.Message)
 }
 
 func TestHandlerToken_MethodBinding(t *testing.T) {
@@ -230,7 +231,7 @@ func TestHandlerToken_MethodBinding(t *testing.T) {
 	RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
 		return echoResult{Message: "ran"}, nil
 	})
-	srv := setupTestServer(t)
+	srv, logs := setupTestServerObservingLogs(t)
 	defer srv.Close()
 
 	// Token method claim names a DIFFERENT method than the request -> reject.
@@ -238,7 +239,8 @@ func TestHandlerToken_MethodBinding(t *testing.T) {
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.echo","params":{"name":"x"}}`
 	resp := postRPC(t, srv.URL, body, map[string]string{"Authorization": "Bearer " + token})
 	require.NotNil(t, resp.Error)
-	assert.Contains(t, resp.Error.Message, "method mismatch")
+	assert.Equal(t, "auth.invalid_token", resp.Error.Message)
+	assert.Contains(t, loggedReason(t, logs), "method mismatch")
 }
 
 func TestServe_VerifierRequiresSignedBoot(t *testing.T) {
@@ -276,7 +278,10 @@ func TestReservedParamCollisionRejected(t *testing.T) {
 	body := `{"jsonrpc":"2.0","id":"req-1","method":"test.echo","params":{"name":"x","_spoofed":"y"}}`
 	resp := postRPC(t, srv.URL, body, map[string]string{"Authorization": "Bearer " + token})
 	require.NotNil(t, resp.Error)
-	assert.Contains(t, resp.Error.Message, "unknown reserved param")
+	assert.Equal(t, "action.invalid_params", resp.Error.Message)
+	param, ok := resp.Error.Data.ExtString("param")
+	assert.True(t, ok)
+	assert.Equal(t, "_spoofed", param)
 }
 
 func TestGenerateFunctionsYAML_VerifiersBlock(t *testing.T) {

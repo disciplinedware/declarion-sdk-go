@@ -44,6 +44,14 @@ type TypeDef struct {
 	// A deprecated type keeps its declaration so a consumer branching on it
 	// still parses; it simply stops being raised.
 	Deprecated bool `yaml:"deprecated,omitempty" json:"deprecated,omitempty"`
+	// Deny marks a type that turns a caller away for lack of authority, as
+	// opposed to one that reports something broken. It is the type's, not the
+	// occurrence's: two failures a compliance reader must count separately are
+	// two failures, and one of them says who was refused what.
+	//
+	// Not derivable from status - 403 and 422 are both 4xx and only one is this
+	// - nor from the code's owner segment, which names the declaring MODULE.
+	Deny bool `yaml:"deny,omitempty" json:"deny,omitempty"`
 }
 
 // Catalogue is the merge of every loaded module's error types. One per
@@ -107,6 +115,14 @@ func ProcessRenderContext(locale, instance string, maxBytes int) RenderContext {
 		Instance:      instance,
 		MaxBytes:      maxBytes,
 	}
+}
+
+// Lookup reads a declared type from the process catalogue. For a party that
+// must fill in what a raise site could not know - a status, a title - without
+// going through Render, whose rules are the RESPONSE's and blank an undeclared
+// type's text on purpose.
+func Lookup(code string) (*TypeDef, bool) {
+	return catalogue().Lookup(code)
 }
 
 // Declared answers whether the process catalogue carries this code.

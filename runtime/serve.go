@@ -231,12 +231,12 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	protoVer := r.Header.Get("X-Declarion-Protocol-Version")
 	if protoVer != "" && protoVer != ProtocolVersion {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("transport.protocol_mismatch", errs.Args{"expected": ProtocolVersion, "got": protoVer})))
+			errs.New("handler.protocol_mismatch", errs.Args{"expected": ProtocolVersion, "got": protoVer})))
 		return
 	}
 
 	if req.JSONRPC != "2.0" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidRequest, errs.New("platform.invalid_body_shape").WithDetail("jsonrpc must be 2.0")))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidRequest, errs.New("platform.invalid_body_shape")))
 		return
 	}
 
@@ -280,7 +280,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		// (older Core mints omit the method claim).
 		if claims.Method != "" && claims.Method != req.Method {
 			cfg.Logger.Warn("handler token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token").WithDetail("token method mismatch")))
+			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token")))
 			return
 		}
 		tenantID = claims.TenantID
@@ -306,10 +306,9 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	// params are unmarshalled. Reserved keys (underscore prefix) are
 	// platform-injected metadata; handlers see them via dedicated HandlerCtx
 	// fields, not as part of their declared params surface.
-	reserved, paramsWithoutReserved, err := extractReservedParams(req.Params)
-	if err != nil {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			errs.New("action.invalid_params").Because(err)))
+	reserved, paramsWithoutReserved, paramsErr := extractReservedParams(req.Params)
+	if paramsErr != nil {
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams, paramsErr))
 		return
 	}
 
@@ -355,14 +354,14 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config, req *Request, token string) {
 	if cfg.JWTSecret == "" {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("auth.unauthorized").WithDetail("verifier methods require signed tokens")))
+			errs.New("auth.unauthorized")))
 		return
 	}
 	claims, err := parseVerifierToken(token, cfg.JWTSecret)
 	if err != nil {
 		cfg.Logger.Warn("invalid verifier token", zap.Error(err), zap.String("method", req.Method))
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("auth.invalid_token").WithDetail("invalid verifier token")))
+			errs.New("auth.invalid_token")))
 		return
 	}
 	// Exact-method binding before registry lookup: the token authorizes exactly
@@ -370,13 +369,13 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 	if claims.Method != req.Method {
 		cfg.Logger.Warn("verifier token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("auth.invalid_token").WithDetail("token method mismatch")))
+			errs.New("auth.invalid_token")))
 		return
 	}
 	fn, ok := lookupVerifier(req.Method)
 	if !ok {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCMethodNotFound,
-			errs.New("handler.not_registered").WithDetail(fmt.Sprintf("verifier %q not found", req.Method))))
+			errs.New("handler.not_registered", errs.Args{"method": req.Method})))
 		return
 	}
 	env, err := decodeExternalRequestEnvelope(req.Params)
@@ -388,7 +387,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 	rawBody, err := base64.StdEncoding.DecodeString(env.RawBodyBase64)
 	if err != nil {
 		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			errs.New("action.invalid_params").WithDetail("invalid raw_body_base64").Because(err)))
+			errs.New("action.invalid_params", errs.Args{"param": "raw_body_base64"}).Because(err)))
 		return
 	}
 
@@ -510,7 +509,7 @@ func writeHandlerError(w http.ResponseWriter, id, method string, err error, cfg 
 	}
 	if errors.Is(err, kern.ErrNotFound) {
 		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCMethodNotFound,
-			errs.New("handler.not_registered").WithDetail(fmt.Sprintf("method %q not found", method))))
+			errs.New("handler.not_registered", errs.Args{"method": method})))
 		return
 	}
 	cfg.Logger.Error("handler error", zap.String("method", method), zap.Error(err))
@@ -532,7 +531,7 @@ type reservedParams struct {
 // through untouched. Any UNKNOWN `_`-prefixed key is rejected (fail closed) so
 // a caller cannot smuggle spoofed reserved metadata past the typed handler
 // surface (business params never use the `_` prefix by convention).
-func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage, error) {
+func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage, *errs.Error) {
 	var out reservedParams
 	if len(raw) == 0 {
 		return out, raw, nil
@@ -541,14 +540,16 @@ func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage
 	if err := json.Unmarshal(raw, &bag); err != nil {
 		return out, raw, nil
 	}
-	unmarshalReserved := func(key string, dst any) error {
+	unmarshalReserved := func(key string, dst any) *errs.Error {
 		v, ok := bag[key]
 		if !ok {
 			return nil
 		}
 		delete(bag, key)
 		if err := json.Unmarshal(v, dst); err != nil {
-			return fmt.Errorf("invalid %s: %w", key, err)
+			// The KEY, never the value: the sender must be able to fix the
+			// call, and their value may be anything.
+			return errs.New("action.invalid_params", errs.Args{"param": key}).Because(err)
 		}
 		return nil
 	}
@@ -564,12 +565,12 @@ func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage
 	// Fail closed on any remaining reserved-prefixed key.
 	for k := range bag {
 		if strings.HasPrefix(k, "_") {
-			return out, raw, fmt.Errorf("unknown reserved param %q", k)
+			return out, raw, errs.New("action.invalid_params", errs.Args{"param": k})
 		}
 	}
 	cleaned, err := json.Marshal(bag)
 	if err != nil {
-		return out, raw, fmt.Errorf("re-marshal params: %w", err)
+		return out, raw, errs.New("platform.internal_error").Because(err)
 	}
 	return out, cleaned, nil
 }

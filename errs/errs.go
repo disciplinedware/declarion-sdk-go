@@ -63,6 +63,12 @@ type Error struct {
 	Instance  string `json:"instance,omitempty"`
 	Retryable bool   `json:"retryable"` // always emitted
 
+	// Deny is the type's, stamped at the raise site from the catalogue the way
+	// Retryable is, so a classifier downstream never has to consult one. Not
+	// serialized: a caller learns it was refused from the type and the status,
+	// and the member exists for the party RECORDING the decision.
+	Deny bool `json:"-"`
+
 	// Fields serialize as TOP-LEVEL members per RFC 9457, not a nested bag.
 	Fields map[string]any `json:"-"`
 
@@ -99,6 +105,7 @@ func New(code string, args ...Args) *Error {
 	}
 	if def, ok := catalogue().Lookup(code); ok {
 		e.Retryable = def.Retryable
+		e.Deny = def.Deny
 	}
 	return e
 }
@@ -109,12 +116,22 @@ func (e *Error) Because(err error) *Error {
 	return e
 }
 
-// WithDetail attaches a diagnostic line for what neither the type nor its
-// members can say. A chain method so writing one is a decision.
-func (e *Error) WithDetail(s string) *Error {
-	e.Detail = s
-	return e
-}
+// There is no WithDetail. Nothing in this platform writes a `detail`.
+//
+// A detail is not declared and not localized, and every sentence a person reads
+// here is multilingual - every display name, label, enum value and screen
+// title. A detail would be a permanent hole in that, and RFC 9457 is silent on
+// language because it was written for APIs that have one. So a FACT goes in
+// Fields, declared and typed, and a screen composes its own sentence around it
+// in the reader's language; the SENTENCE is the type's title, one per type,
+// translated; and what only an OPERATOR needs - a driver's message, a parse
+// error, a library's text - is the cause, attached with Because, which is never
+// serialized.
+//
+// The Detail FIELD stays, because an object arriving from a third party may
+// carry one and must survive a round trip. Removing the method is the whole
+// enforcement: a raise site that wants one no longer compiles, which is cheaper
+// and stricter than any test.
 
 // Error is the OPERATOR's string and carries the cause. Never write it to a
 // wire; the wire carries Title and Detail, which a producer vetted.
@@ -181,6 +198,14 @@ func IsNilError(err error) bool {
 	return ok && e == nil
 }
 
+// IsDeny reports whether err was a caller turned away for lack of authority,
+// which its TYPE declares. False for a plain error: an unrecognised failure is
+// not evidence that someone was refused.
+func IsDeny(err error) bool {
+	e, ok := From(err)
+	return ok && e.Deny
+}
+
 // HasCode reports whether err carries this declared type anywhere in its
 // wrapped chain. The one way a consumer branches on identity.
 func HasCode(err error, code string) bool {
@@ -239,6 +264,11 @@ var knownMembers = map[string]bool{
 	"detail": true, "instance": true, "retryable": true,
 }
 
+// IsKnownMember reports a name RFC 9457 already gives the object. A declared
+// member with one of these names is dropped rather than overwriting it, so a
+// loader must refuse the declaration.
+func IsKnownMember(name string) bool { return knownMembers[name] }
+
 func (e *Error) MarshalJSON() ([]byte, error) {
 	m := make(map[string]any, len(e.Fields)+6)
 	for k, v := range e.Fields {
@@ -280,12 +310,15 @@ func (e *Error) UnmarshalJSON(b []byte) error {
 		case "type":
 			e.Type, _ = v.(string)
 		case "status":
+			// A status that is not a whole number is IGNORED, never fatal:
+			// RFC 9457 §3.1 tells a consumer to ignore a member whose value is
+			// not the form it expects, and rejecting the object over one
+			// advisory number would throw away the type - the only member a
+			// consumer branches on.
 			if n, ok := v.(json.Number); ok {
-				i, err := n.Int64()
-				if err != nil {
-					return err
+				if i, err := n.Int64(); err == nil {
+					e.Status = int(i)
 				}
-				e.Status = int(i)
 			}
 		case "title":
 			e.Title, _ = v.(string)

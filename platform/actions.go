@@ -95,12 +95,12 @@ func (a *ActionsClient) Invoke(ctx context.Context, code string, params InvokePa
 	if params.IDs != nil {
 		body["object_ids"] = params.IDs
 	}
-	respBody, status, err := a.c.do(ctx, "POST", fmt.Sprintf("/api/actions/%s", code), nil, body, targetTenantOptions(params.TargetTenantID, params.TargetTenantCode)...)
+	respBody, status, contentType, err := a.c.do(ctx, "POST", fmt.Sprintf("/api/actions/%s", code), nil, body, targetTenantOptions(params.TargetTenantID, params.TargetTenantCode)...)
 	if err != nil {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, errorFromResponse(status, respBody, fmt.Sprintf("/api/actions/%s", code))
+		return nil, errorFromResponse(status, respBody, fmt.Sprintf("/api/actions/%s", code), contentType)
 	}
 	var result InvokeResult
 	if err := json.Unmarshal(respBody, &result); err != nil {

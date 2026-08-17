@@ -6,6 +6,7 @@ package conformance
 
 import (
 	"github.com/disciplinedware/declarion-sdk-go/errs"
+	"github.com/disciplinedware/declarion-sdk-go/platform"
 
 	"bytes"
 	"encoding/json"
@@ -37,6 +38,10 @@ type Harness struct {
 
 	// CallbackRecords captures callbacks the sidecar made to the fake platform.
 	CallbackRecords []CallbackRecord
+
+	// CallbackAnswersWith makes the fake platform REFUSE the sidecar's
+	// callback with this error instead of answering it. Nil answers success.
+	CallbackAnswersWith *errs.Error
 
 	results []TestResult
 	fakeAPI *httptest.Server
@@ -86,13 +91,23 @@ func (h *Harness) RunAllWithSidecarConfig(cfg *runtime.Config) []TestResult {
 	h.testInvalidTokenRejection()
 	h.testProtocolVersionMismatch()
 	h.testMethodNotFound()
-
+	h.testCallbackErrorRoundTrip()
 	return h.results
 }
 
 func (h *Harness) startFakeAPI() {
 	h.CallbackRecords = nil
 	h.fakeAPI = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.CallbackAnswersWith != nil {
+			// The platform REFUSING a sidecar's callback. Answered exactly as
+			// Declarion answers one: the problem media type and a declared
+			// type, no title - the sidecar renders nothing and carries the
+			// identity onward.
+			w.Header().Set("Content-Type", platform.ProblemContentType)
+			w.WriteHeader(h.CallbackAnswersWith.Status)
+			_ = json.NewEncoder(w).Encode(h.CallbackAnswersWith)
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		h.CallbackRecords = append(h.CallbackRecords, CallbackRecord{
 			Method:      r.Method,
@@ -111,6 +126,53 @@ func (h *Harness) startFakeAPI() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"success","result":{"rows":[{"id":"fake-1","status":"ok"}]}}`))
 	}))
+}
+
+// testCallbackErrorRoundTrip is the full circle: Declarion calls the sidecar,
+// the sidecar calls Declarion back, Declarion REFUSES, and the refusal has to
+// reach the sidecar's handler with its identity intact and travel back out on
+// the JSON-RPC answer.
+//
+// The identity is the only thing that survives every leg. A sidecar renders no
+// title, so a caller reading the outer answer learns what happened from the
+// type and from nothing else - and if a leg replaced the type with one of its
+// own, or buried it in a sentence, this is where it shows.
+func (h *Harness) testCallbackErrorRoundTrip() {
+	h.CallbackAnswersWith = &errs.Error{
+		Type:   errs.TypePrefix + "entity.stale_object",
+		Status: 409,
+		Fields: map[string]any{"row_version": 7},
+	}
+	defer func() { h.CallbackAnswersWith = nil }()
+
+	token := h.mintToken("t1", "u1", "conformance.callback", "op-roundtrip")
+	resp, _, err := h.callSidecar("conformance.callback",
+		map[string]any{"callback_url": h.fakeAPI.URL}, token, "", runtime.ProtocolVersion)
+	if err != nil {
+		h.record("callback_error_round_trip", err)
+		return
+	}
+	if resp.Error == nil {
+		h.record("callback_error_round_trip", fmt.Errorf("a refused callback must fail the handler, got a result"))
+		return
+	}
+	if resp.Error.Data == nil {
+		h.record("callback_error_round_trip", fmt.Errorf("expected an error object at error.data, got none"))
+		return
+	}
+	if got := resp.Error.Data.Code(); got != "entity.stale_object" {
+		h.record("callback_error_round_trip",
+			fmt.Errorf("the platform's own type must survive both legs: got %q, want entity.stale_object", got))
+		return
+	}
+	// A declared field survives with it: the identity alone would leave a
+	// caller unable to act, and the value is the reason the call was refused.
+	if v, ok := resp.Error.Data.ExtInt("row_version"); !ok || v != 7 {
+		h.record("callback_error_round_trip",
+			fmt.Errorf("declared field row_version did not survive: got %v (present=%v)", v, ok))
+		return
+	}
+	h.record("callback_error_round_trip", nil)
 }
 
 func (h *Harness) record(name string, err error) {
@@ -266,8 +328,8 @@ func (h *Harness) testErrorResponse() {
 		h.record("error_response", fmt.Errorf("a sidecar must not send a title, got %q", resp.Error.Data.Title))
 		return
 	}
-	if resp.Error.Data.Detail != "conformance test error" {
-		h.record("error_response", fmt.Errorf("detail: got %q", resp.Error.Data.Detail))
+	if got, ok := resp.Error.Data.ExtInt("upstream_status"); !ok || got != 503 {
+		h.record("error_response", fmt.Errorf("upstream_status: got %v, want 503", resp.Error.Data.Fields["upstream_status"]))
 		return
 	}
 	h.record("error_response", nil)

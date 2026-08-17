@@ -342,17 +342,22 @@ type's `fields:`. Nothing else is set at the raise site: `status`, `retryable`
 and `title` come from the declaration when Declarion renders the response, so a
 handler never guesses any of them.
 
-`detail` is the one thing a raise site adds, and it is rare - it describes THIS
-occurrence and exists for what neither the type nor its members can say:
+What only an OPERATOR needs - a driver's message, a parse failure, a library's
+text - is the cause, which no carrier serializes:
 
 ```go
-return result, errs.New("clickup.rate_limited").
-    WithDetail("list 4021 exceeded its per-minute budget").
+return result, errs.New("clickup.rate_limited", errs.Args{"list_id": 4021}).
     Because(err)   // the operator's cause; never serialized
 ```
 
+There is no way to write a `detail`. RFC 9457's fifth member is a sentence
+nobody declared and nobody translated, and every sentence a person reads on this
+platform is multilingual. A FACT goes in `fields:`, declared and typed, and a
+screen composes its own sentence around it in the reader's language; the
+SENTENCE is the type's `title`, one per type, translated.
+
 An error your module does not declare keeps its identity and takes a fallback
-rendering with an empty detail, plus a warning naming it. Any other `error`
+rendering, plus a warning naming it. Any other `error`
 becomes `action.failed`.
 
 ### 3. Read one
@@ -374,6 +379,22 @@ what `retryable` is for.
 
 For a call you made INTO the platform, `platform.StatusOf(err)` and
 `platform.IsNotFound(err)` answer the two questions a client usually has.
+
+### When the platform is not the one answering
+
+A failure that is NOT Declarion's answer gets one of this client's OWN declared
+types, so you branch on identity there too and never on a Go error string:
+
+| Code | Means | Retry |
+|---|---|---|
+| `transport.request_failed` | the request never completed - dial, TLS, a reset, a deadline on this side | yes |
+| `transport.unreadable_response` | a non-2xx that is not an error object: an ingress page, an empty body. Carries `peer_status` and a bounded `body` | yes |
+| `transport.stream_interrupted` | a stream that ended without its terminal event | yes |
+| `transport.stream_unreadable` | a stream that arrived and did not follow the contract: wrong media type, a frame this client cannot parse, an event it does not know | no |
+| `transport.stream_event_too_large` | one event over THIS client's own bound. Carries `limit_bytes`; raise `MaxEventBytes` | no |
+
+`peer_status`, not `status`: RFC 9457 already gives the object a `status`, and a
+declared member of that name is dropped when the object is serialized.
 
 ## Conformance test suite
 

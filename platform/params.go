@@ -32,12 +32,12 @@ type paramLookupResponse struct {
 // Transport errors propagate; "not found" is never an error.
 func (p *ParamsClient) Lookup(ctx context.Context, code string) (value any, found bool, source string, err error) {
 	path := fmt.Sprintf("/api/params/%s", code)
-	body, status, ferr := p.c.do(ctx, "GET", path, nil, nil)
+	body, status, contentType, ferr := p.c.do(ctx, "GET", path, nil, nil)
 	if ferr != nil {
 		return nil, false, "", ferr
 	}
 	if status < 200 || status >= 300 {
-		return nil, false, "", errorFromResponse(status, body, path)
+		return nil, false, "", errorFromResponse(status, body, path, contentType)
 	}
 	var result paramLookupResponse
 	if jerr := json.Unmarshal(body, &result); jerr != nil {

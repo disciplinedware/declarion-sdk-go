@@ -208,18 +208,27 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 	return req, nil
 }
 
-// do executes an HTTP request with all required headers and buffers the response.
-func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) ([]byte, int, error) {
+// do executes an HTTP request with all required headers and buffers the
+// response. It returns the CONTENT TYPE beside the body because that is what
+// decides whether a non-2xx is the platform speaking: any proxy may answer RFC
+// 9457, and a body accepted for its shape alone lets a proxy-owned identity
+// pass as a platform one.
+//
+// A request that never produced a response, and a response this client could
+// not read, take the client's OWN transport types - so a caller can ask
+// errors.Is(err, errs.ErrRetryable) about a dial failure and be told yes.
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) ([]byte, int, string, error) {
 	req, err := c.newRequest(ctx, method, path, query, body, opts...)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("request %s %s: %w", method, path, err)
+		return nil, 0, "", errorFromTransport(path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	contentType := resp.Header.Get("Content-Type")
 
 	// MaxBytesReader surfaces *http.MaxBytesError on overflow so callers see
 	// "response exceeded N bytes" instead of a silently-truncated body that
@@ -228,10 +237,11 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			return nil, resp.StatusCode, fmt.Errorf("platform %s %s: response exceeded %d bytes (limit %d)", method, path, maxErr.Limit, MaxResponseSize)
+			return nil, resp.StatusCode, contentType, errorFromUnreadable(resp.StatusCode, path,
+				fmt.Errorf("response exceeded %d bytes (limit %d)", maxErr.Limit, MaxResponseSize))
 		}
-		return nil, resp.StatusCode, fmt.Errorf("read response: %w", err)
+		return nil, resp.StatusCode, contentType, errorFromUnreadable(resp.StatusCode, path, err)
 	}
 
-	return respBody, resp.StatusCode, nil
+	return respBody, resp.StatusCode, contentType, nil
 }

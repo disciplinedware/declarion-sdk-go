@@ -41,10 +41,10 @@ const (
 // single event the platform was willing to send always fits here.
 const MaxStreamEventSize = 100 * 1024 * 1024
 
-// errEventTooLarge is the sentinel wrapped by readLine's size-cap error, so
-// readEvent can distinguish "capped" from "read failed" without string
-// matching.
-var errEventTooLarge = errors.New("streaming action: event exceeds max size")
+// errEventTooLarge marks readLine's size-cap refusal, so readEvent can tell
+// "capped" from "read failed" without string matching. It never reaches a
+// consumer: readEvent turns it into the declared type.
+var errEventTooLarge = errors.New("event exceeds max size")
 
 // streamEndEnvelope is the terminal declarion.stream.end JSON body. The error
 // is the same object every other carrier sends, so one parser reads them all -
@@ -91,8 +91,15 @@ type ActionStream struct {
 	reader *bufio.Reader
 	cancel context.CancelFunc
 
+	path          string
 	maxEventBytes int
 	cur           []byte
+	// received counts what THIS reader actually took off the wire. The
+	// terminal event says what the server sent, and a stream that breaks has
+	// no terminal - so a count that came only from there reports zero after a
+	// partial answer, and a caller cannot tell "nothing arrived" from "some
+	// did".
+	received Delivered
 	err           error
 	done          bool
 	delivered     Delivered
@@ -111,6 +118,13 @@ func newActionStream(body io.ReadCloser, cancel context.CancelFunc, maxEventByte
 		cancel:        cancel,
 		maxEventBytes: maxEventBytes,
 	}
+}
+
+// WithPath names the route this stream is reading, so a failure it raises says
+// which one broke.
+func (s *ActionStream) WithPath(path string) *ActionStream {
+	s.path = path
+	return s
 }
 
 // NewActionStreamStarted wraps an already-open, already-validated (2xx,
@@ -159,24 +173,29 @@ func (a *ActionsClient) InvokeStreaming(ctx context.Context, code string, params
 	resp, err := a.c.http.Do(req)
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("request POST %s: %w", path, err)
+		return nil, errorFromTransport(path, err)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Pre-start failure: HTTP status is authoritative, mapped to the same
-		// APIError the buffered Invoke returns.
+		// Pre-start failure: the stream never committed, so this is an ordinary
+		// buffered failure and reads through the same classifier.
 		raw, _ := io.ReadAll(http.MaxBytesReader(nil, resp.Body, MaxResponseSize))
+		contentType := resp.Header.Get("Content-Type")
 		_ = resp.Body.Close()
 		cancel()
-		return nil, errorFromResponse(resp.StatusCode, raw, path)
+		return nil, errorFromResponse(resp.StatusCode, raw, path, contentType)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/event-stream") {
 		_ = resp.Body.Close()
 		cancel()
-		return nil, fmt.Errorf("streaming action %s: expected text/event-stream, got %q", code, ct)
+		return nil, streamUnreadable(path, fmt.Errorf("expected text/event-stream, got %q", ct))
 	}
 
-	return NewActionStreamStarted(resp.Body, cancel, MaxStreamEventSize)
+	stream, serr := NewActionStreamStarted(resp.Body, cancel, MaxStreamEventSize)
+	if stream != nil {
+		stream.WithPath(path)
+	}
+	return stream, serr
 }
 
 // readStart consumes events until the first non-heartbeat event, which MUST be
@@ -187,10 +206,10 @@ func (s *ActionStream) readStart() error {
 		return err
 	}
 	if ev.event != streamEventStart {
-		return fmt.Errorf("streaming action: expected %s as the first event, got %q", streamEventStart, ev.event)
+		return streamUnreadable(s.path, fmt.Errorf("expected %s as the first event, got %q", streamEventStart, ev.event))
 	}
 	if !json.Valid(ev.data) {
-		return fmt.Errorf("streaming action: start metadata is not valid JSON")
+		return streamUnreadable(s.path, errors.New("start metadata is not valid JSON"))
 	}
 	s.meta = append(json.RawMessage(nil), ev.data...)
 	return nil
@@ -215,15 +234,17 @@ func (s *ActionStream) Next() bool {
 	switch ev.event {
 	case "":
 		s.cur = ev.data
+		s.received.Frames++
+		s.received.Bytes += int64(len(ev.data))
 		return true
 	case streamEventEnd:
 		s.finishTerminal(ev.data)
 		return false
 	case streamEventStart:
-		s.finish(errors.New("streaming action: unexpected second start event"))
+		s.finish(streamUnreadable(s.path, errors.New("a second start event")))
 		return false
 	default:
-		s.finish(fmt.Errorf("streaming action: unknown control event %q", ev.event))
+		s.finish(streamUnreadable(s.path, fmt.Errorf("unknown control event %q", ev.event)))
 		return false
 	}
 }
@@ -236,11 +257,19 @@ func (s *ActionStream) Data() []byte { return s.cur }
 // otherwise. Meaningful only after Next returns false.
 func (s *ActionStream) Err() error { return s.err }
 
-// Delivered reports what the terminal event said reached this reader. A
-// partially delivered answer is not a failed one, and a caller that cannot tell
-// them apart either discards work that arrived or trusts an answer that did
-// not finish. Meaningful only after Next returns false.
-func (s *ActionStream) Delivered() Delivered { return s.delivered }
+// Delivered reports what actually reached this reader. A partially delivered
+// answer is not a failed one, and a caller that cannot tell them apart either
+// discards work that arrived or trusts an answer that did not finish.
+//
+// Counted HERE, not taken from the terminal event: a stream that breaks mid-way
+// never sends one. The terminal's own counts are what the SERVER sent, which is
+// a different fact - Sent() answers that, and the two disagreeing is exactly
+// how a caller learns the answer was cut short.
+func (s *ActionStream) Delivered() Delivered { return s.received }
+
+// Sent reports what the terminal event said the server delivered. Zero when the
+// stream ended without one.
+func (s *ActionStream) Sent() Delivered { return s.delivered }
 
 // Close cancels the request and releases the body. Idempotent and safe to call
 // from another goroutine to unblock a stalled Next; it touches only the atomic
@@ -270,7 +299,7 @@ func (s *ActionStream) finish(err error) {
 func (s *ActionStream) finishTerminal(data []byte) {
 	var env streamEndEnvelope
 	if err := json.Unmarshal(data, &env); err != nil {
-		s.finish(fmt.Errorf("streaming action: malformed terminal event: %w", err))
+		s.finish(streamUnreadable(s.path, fmt.Errorf("malformed terminal event: %w", err)))
 		return
 	}
 	s.delivered = Delivered{Frames: env.DeliveredFrames, Bytes: env.DeliveredBytes}
@@ -279,12 +308,12 @@ func (s *ActionStream) finishTerminal(data []byte) {
 		s.finish(nil)
 	case "error":
 		if env.Error == nil {
-			s.finish(errors.New("streaming action: terminal error event missing error object"))
+			s.finish(streamUnreadable(s.path, errors.New("terminal error event carries no error object")))
 			return
 		}
 		s.finish(env.Error)
 	default:
-		s.finish(fmt.Errorf("streaming action: unknown terminal status %q", env.Status))
+		s.finish(streamUnreadable(s.path, fmt.Errorf("unknown terminal status %q", env.Status)))
 	}
 }
 
@@ -335,18 +364,26 @@ func (s *ActionStream) readEvent() (sseEvent, error) {
 			raw, err := s.readLine(&total)
 			if err != nil {
 				if errors.Is(err, errEventTooLarge) {
-					return sseEvent{}, err
+					return sseEvent{}, transportErr(TypeStreamEventTooLarge, errs.Args{
+						FieldLimitBytes: s.maxEventBytes,
+						FieldPath:       s.path,
+					}, err)
 				}
-				if err == io.EOF {
+				// Every one of these is a stream that ended without its
+				// terminal event, which is one fact with one type. The cause
+				// says which shape it took and never reaches a wire.
+				if errors.Is(err, io.EOF) {
 					if len(raw) == 0 && !haveData && event == "" && !comment && total == 0 {
-						return sseEvent{}, fmt.Errorf("streaming action: EOF before terminal event")
+						return sseEvent{}, errorFromInterruptedStream(s.path,
+							errors.New("EOF before the terminal event"))
 					}
-					return sseEvent{}, fmt.Errorf("streaming action: EOF mid-event before terminal")
+					return sseEvent{}, errorFromInterruptedStream(s.path,
+						errors.New("EOF mid-event before the terminal event"))
 				}
-				return sseEvent{}, fmt.Errorf("streaming action: read: %w", err)
+				return sseEvent{}, errorFromInterruptedStream(s.path, err)
 			}
 			if bytes.IndexByte(raw, '\r') >= 0 {
-				return sseEvent{}, fmt.Errorf("streaming action: CR byte in stream is rejected")
+				return sseEvent{}, streamUnreadable(s.path, errors.New("a CR byte, which SSE does not allow here"))
 			}
 			// Strip the trailing LF; a bare "\n" line terminates the event.
 			line := string(bytes.TrimSuffix(raw, []byte("\n")))
@@ -368,7 +405,7 @@ func (s *ActionStream) readEvent() (sseEvent, error) {
 				data = append(data, v...)
 				haveData = true
 			default:
-				return sseEvent{}, fmt.Errorf("streaming action: unrecognized SSE line %q", line)
+				return sseEvent{}, streamUnreadable(s.path, fmt.Errorf("unrecognized SSE line %q", line))
 			}
 		}
 
@@ -377,10 +414,10 @@ func (s *ActionStream) readEvent() (sseEvent, error) {
 			if comment {
 				continue
 			}
-			return sseEvent{}, fmt.Errorf("streaming action: empty SSE event")
+			return sseEvent{}, streamUnreadable(s.path, errors.New("an empty SSE event"))
 		}
 		if haveData && !utf8.Valid(data) {
-			return sseEvent{}, fmt.Errorf("streaming action: data frame is not valid UTF-8")
+			return sseEvent{}, streamUnreadable(s.path, errors.New("a data frame that is not valid UTF-8"))
 		}
 		return sseEvent{event: event, data: data}, nil
 	}

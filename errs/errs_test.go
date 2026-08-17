@@ -122,7 +122,7 @@ func TestMarshalOmitsTheBoundaryMembersAStoredOccurrenceNeverHas(t *testing.T) {
 	errs.SetCatalogue(testCatalogue(), "en")
 	t.Cleanup(func() { errs.SetCatalogue(nil, "") })
 
-	raised := errs.New("transport.stream_interrupted").WithDetail("upstream closed")
+	raised := errs.New("transport.stream_interrupted")
 	b, err := json.Marshal(raised)
 	require.NoError(t, err)
 	stored := map[string]any{}
@@ -130,7 +130,6 @@ func TestMarshalOmitsTheBoundaryMembersAStoredOccurrenceNeverHas(t *testing.T) {
 	assert.NotContains(t, stored, "title")
 	assert.NotContains(t, stored, "status")
 	assert.NotContains(t, stored, "instance")
-	assert.Equal(t, "upstream closed", stored["detail"])
 
 	b, err = json.Marshal(errs.Render(raised, errs.RenderContext{
 		Catalogue: testCatalogue(), Locale: "en", Instance: "/requests/r1",
@@ -381,4 +380,18 @@ func TestANilErrorTravellingAsAnErrorDoesNotPanic(t *testing.T) {
 		_ = absent.Error()
 		_ = absent.Code()
 	})
+}
+
+// RFC 9457 §3.1: a consumer ignores a member whose value is not the form it
+// expects. Rejecting the object over one advisory number threw away the TYPE,
+// which is the only member a consumer branches on.
+func TestAMalformedStatusIsIgnoredNotFatal(t *testing.T) {
+	var e errs.Error
+	require.NoError(t, json.Unmarshal(
+		[]byte(`{"type":"/errors/entity.stale_object","status":409.5,"row_version":7}`), &e))
+	assert.Equal(t, "entity.stale_object", e.Code(), "the type survives a malformed status")
+	assert.Zero(t, e.Status, "a status that is not a whole number is not read")
+	v, ok := e.ExtInt("row_version")
+	assert.True(t, ok)
+	assert.Equal(t, 7, v, "the declared members survive too")
 }

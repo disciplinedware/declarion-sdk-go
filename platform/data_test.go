@@ -211,6 +211,7 @@ func TestList_offset_mode_params(t *testing.T) {
 // TestList_http_error surfaces the platform's own error object, type intact.
 func TestList_http_error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", ProblemContentType)
 		w.WriteHeader(422)
 		_, _ = w.Write([]byte(`{"type":"/errors/entity.validation_failed","title":"bad op","retryable":false}`))
 	}))
@@ -513,6 +514,7 @@ func TestBulkUpdate_omits_optional_fields(t *testing.T) {
 // object from the action endpoint, type intact.
 func TestBulkUpdate_propagates_http_error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", ProblemContentType)
 		w.WriteHeader(422)
 		_, _ = w.Write([]byte(`{"type":"/errors/entity.validation_failed","title":"missing pk","retryable":false}`))
 	}))

@@ -14,6 +14,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const testSecret = "test-secret-key-for-handler-tokens"
@@ -51,6 +54,24 @@ func setupTestServer(t *testing.T) *httptest.Server {
 	cfg := &Config{JWTSecret: testSecret}
 	cfg.withDefaults()
 	return startInProcessServer(t, cfg)
+}
+
+// setupTestServerObservingLogs is for a refusal whose REASON is deliberately
+// absent from the response: the wire carries the type and the reason goes to
+// the operator, so a test proving which refusal fired must read the log.
+func setupTestServerObservingLogs(t *testing.T) (*httptest.Server, *observer.ObservedLogs) {
+	t.Helper()
+	core, logs := observer.New(zapcore.WarnLevel)
+	cfg := &Config{JWTSecret: testSecret, Logger: zap.New(core)}
+	cfg.withDefaults()
+	return startInProcessServer(t, cfg), logs
+}
+
+func loggedReason(t *testing.T, logs *observer.ObservedLogs) string {
+	t.Helper()
+	entries := logs.All()
+	require.NotEmpty(t, entries, "the operator was told nothing")
+	return entries[len(entries)-1].Message
 }
 
 func setupTestServerWithConfig(t *testing.T, cfg *Config) *httptest.Server {
@@ -163,17 +184,17 @@ func TestHandleRPC_protocol_version_mismatch(t *testing.T) {
 	respBody, _ := io.ReadAll(resp.Body)
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCServerError, rpcResp.Error.Code)
-	assert.Equal(t, "transport.protocol_mismatch", rpcResp.Error.Data.Code())
+	assert.Equal(t, "handler.protocol_mismatch", rpcResp.Error.Data.Code())
 	assert.Equal(t, "req-1", rpcResp.ID)
 }
 
 func TestHandleRPC_handler_error(t *testing.T) {
 	ClearHandlerRegistry()
 	RegisterHandler[echoParams, echoResult]("test.fail", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
-		// A handler declares its OWN type and nothing else - no status, no
-		// title, no numeric code. Declarion fills the title.
-		return echoResult{}, errs.New("platform.external_service_error").
-			WithDetail("ClickUp API 429")
+		// A handler declares its OWN type and its declared members - no status,
+		// no title, no numeric code. Declarion fills the title.
+		return echoResult{}, errs.New("platform.external_service_error",
+			errs.Args{"upstream_status": 429})
 	})
 	srv := setupTestServer(t)
 	defer srv.Close()
@@ -188,7 +209,9 @@ func TestHandleRPC_handler_error(t *testing.T) {
 	require.NoError(t, json.Unmarshal(respBody, &rpcResp))
 	assert.Equal(t, JSONRPCServerError, rpcResp.Error.Code)
 	assert.Equal(t, "platform.external_service_error", rpcResp.Error.Data.Code())
-	assert.Equal(t, "ClickUp API 429", rpcResp.Error.Data.Detail)
+	gotStatus, ok := rpcResp.Error.Data.ExtInt("upstream_status")
+	assert.True(t, ok)
+	assert.Equal(t, 429, gotStatus)
 	assert.Empty(t, rpcResp.Error.Data.Title,
 		"a sidecar carries no title: Declarion renders one from its own declarations, in the caller's language")
 }
@@ -377,8 +400,7 @@ func TestASidecarWithNoCatalogueStillAnswersFully(t *testing.T) {
 	errs.SetCatalogue(nil, "")
 	ClearHandlerRegistry()
 	RegisterHandler[echoParams, echoResult]("test.no_catalogue", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
-		return echoResult{}, errs.New("acme-portal.quota_exhausted", errs.Args{"limit": 100}).
-			WithDetail("the daily quota is spent")
+		return echoResult{}, errs.New("acme-portal.quota_exhausted", errs.Args{"limit": 100})
 	})
 	srv := setupTestServer(t)
 	defer srv.Close()
@@ -396,7 +418,6 @@ func TestASidecarWithNoCatalogueStillAnswersFully(t *testing.T) {
 
 	assert.Equal(t, "acme-portal.quota_exhausted", rpcResp.Error.Data.Code(),
 		"the handler's own type, whether or not this process can name it")
-	assert.Equal(t, "the daily quota is spent", rpcResp.Error.Data.Detail)
 	assert.Empty(t, rpcResp.Error.Data.Title, "the title is Declarion's to fill")
 	assert.Zero(t, rpcResp.Error.Data.Status, "a status describes a boundary this handler is not at")
 	limit, ok := rpcResp.Error.Data.ExtInt("limit")

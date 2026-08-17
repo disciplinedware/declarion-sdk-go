@@ -38,6 +38,7 @@ func render(e *Error, rc RenderContext) *Error {
 		Detail:    e.Detail,
 		Instance:  rc.Instance,
 		Retryable: e.Retryable,
+		Deny:      e.Deny,
 		cause:     e.cause,
 	}
 	if len(e.Fields) > 0 {
@@ -52,6 +53,7 @@ func render(e *Error, rc RenderContext) *Error {
 	if def, ok := rc.Catalogue.Lookup(e.Code()); ok {
 		out.Status = def.Status
 		out.Retryable = def.Retryable
+		out.Deny = def.Deny
 		out.Title = def.TitleFor(rc.Locale, rc.DefaultLocale)
 		return out
 	}

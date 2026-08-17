@@ -70,13 +70,17 @@ func JSONRPCCodeFor(e *errs.Error) int {
 //
 // The numeric JSON-RPC code is derived from the transport situation, not chosen
 // for meaning: it is a protocol artefact, and the identity a consumer branches
-// on is `data.type`. Message carries the object's own operator string so a
-// reader with no structured parser still sees something.
+// on is `data.type`.
+//
+// Message carries the CODE, never Error(). Error() is the operator's string and
+// appends the unserialized cause - a database message, a provider body, a token
+// embedded in a third-party error - and this is a wire. A reader with no
+// structured parser still gets the identity; everything else is in `data`.
 func NewErrorResponse(id string, code int, e *errs.Error) *Response {
 	e = errs.Bounded(e, 0)
 	msg := ""
 	if e != nil {
-		msg = e.Error()
+		msg = e.Code()
 	}
 	return &Response{
 		JSONRPC: "2.0",

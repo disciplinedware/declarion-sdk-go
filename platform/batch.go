@@ -223,12 +223,12 @@ func (b *Batch) Execute(ctx context.Context) (*BatchResponse, error) {
 		"actions": b.ops,
 		"atomic":  true,
 	}
-	respBody, status, err := b.c.do(ctx, "POST", "/api/actions/system.batch", nil, body, targetTenantOptions(b.tenantID, b.tenantCode)...)
+	respBody, status, contentType, err := b.c.do(ctx, "POST", "/api/actions/system.batch", nil, body, targetTenantOptions(b.tenantID, b.tenantCode)...)
 	if err != nil {
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, errorFromResponse(status, respBody, "/api/actions/system.batch")
+		return nil, errorFromResponse(status, respBody, "/api/actions/system.batch", contentType)
 	}
 	// The HTTP layer wraps handler returns under a "result" envelope.
 	var envelope struct {
