@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.21.0] - 2026-08-21
+
 ### Added
 
 - **`errs` - one error object, on RFC 9457, for every Declarion path.** `errs.Error` is the wire shape a failure serializes to on every carrier: `type` is the identifier, `status` is advisory and absent where no HTTP status exists, `retryable` is always present and answered from the declaration rather than computed from a status, and declared fields are top-level members. `errs.New(code, Args{...})` raises one, `Because` attaches the operator's cause (unexported, unmarshalable by construction, never on a wire), and `errs.From` walks a wrapped chain. `errs.Render` is the ONE rendering rule both the platform and an application answering its own client call: it takes `status`, `retryable` and the localized `title` from the loaded catalogue and discards whatever a producer put in `status`, `title` and `instance`. A RAISED occurrence carries none of those three - they describe a boundary it has not reached - which is what lets the same object be stored in a row without freezing one caller's language or an HTTP status a background job never had. `errs.Bounded` is the one validate-or-replace against `errs.DefaultMaxBytes`. `errs.TypeDef` / `errs.Catalogue` are the declaration shape a module's `errors:` block decodes into, so one type serves the decode and the render. Nothing here parses schema YAML or loads a catalogue.
