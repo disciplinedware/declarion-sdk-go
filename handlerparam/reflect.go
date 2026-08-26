@@ -29,7 +29,7 @@ func reflectParams(t reflect.Type) Params {
 	if t == nil {
 		panic("handler params must be a struct, got <nil>")
 	}
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
@@ -86,7 +86,7 @@ func reflectParams(t reflect.Type) Params {
 }
 
 func typeTagCompatible(typeTag string, t reflect.Type) bool {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if stringBackedTypeTags[typeTag] {
@@ -96,7 +96,7 @@ func typeTagCompatible(typeTag string, t reflect.Type) bool {
 }
 
 func goTypeToParamType(t reflect.Type) string {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t == timeType {

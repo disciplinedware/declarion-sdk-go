@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Go 1.27.0 and every module at its latest release.** `go.mod` declares 1.27.0, which is what `govulncheck` reports the standard library against, and matches the version declarion-core and declarion-crm now build with. `reflect.Ptr` gives way to `reflect.Pointer` at its three call sites in `handlerparam/reflect.go`: the alias is deprecated, and golangci-lint 2.13.1 flags it.
+
 ## [v0.21.0] - 2026-08-21
 
 ### Added
