@@ -205,6 +205,7 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 	if ro.tenantCode != "" {
 		req.Header.Set(TargetTenantCodeHeader, ro.tenantCode)
 	}
+	setForwardedFor(req, ctx)
 	return req, nil
 }
 
