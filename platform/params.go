@@ -66,6 +66,31 @@ func (p *ParamsClient) Lookup(ctx context.Context, code string) (value any, foun
 //	token, err := platform.GetParam[string](p, ctx, "clickup_api_token", "")
 //	maxRetries, err := platform.GetParam[int](p, ctx, "max_retries", 3)
 //	enabled, err := platform.GetParam[bool](p, ctx, "feature_flag", false)
+//
+// # Reading a typed parameter
+//
+// A decimal arrives as its canonical TEXT, an enum as the member code, and a
+// list as a []string:
+//
+//	price, err := platform.GetParam[string](p, ctx, "default_unit_price", "")
+//	backend, err := platform.GetParam[string](p, ctx, "mailer_backend", "noop")
+//	models, err := platform.GetParam[[]string](p, ctx, "allowed_models", nil)
+//
+// Reading a decimal as a float type FAILS, and that is deliberate: the text is
+// exact and a float64 is not, so the conversion that would lose the digits is
+// refused rather than performed quietly. Convert it with a decimal library in
+// the consumer, where the rounding rule is the consumer's to choose.
+//
+// # A money read uses Lookup, not GetParam
+//
+// GetParam cannot tell an absent value from a deliberate one: not-found returns
+// the caller's `def`, so a missing price read with a zero default returns zero
+// and reports success - the "charges nothing" failure. For any value where
+// absent and zero mean different things, use Lookup and branch on `found`:
+//
+//	raw, found, _, err := p.Lookup(ctx, "default_unit_price")
+//	if err != nil { return err }
+//	if !found { return errNoPriceConfigured }
 func GetParam[T any](p *ParamsClient, ctx context.Context, code string, def T) (T, error) {
 	value, found, _, err := p.Lookup(ctx, code)
 	if err != nil {
