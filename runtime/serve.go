@@ -63,6 +63,11 @@ type Config struct {
 	// When false (default), requests without tokens succeed with empty identity fields.
 	RequireToken bool
 
+	// Authenticator replaces the default HS256 handler-token verifier. It is
+	// responsible for refusing unauthenticated requests and may return a
+	// callback bearer distinct from the credential it verifies.
+	Authenticator RequestAuthenticator
+
 	// Logger overrides the default structured logger. Defaults to a zap
 	// production logger; tests can pass zaptest or zap.NewNop().
 	Logger *zap.Logger
@@ -112,40 +117,13 @@ func (c *Config) withDefaults() {
 // wrapper that delegates to RegisterHandler). Blocks until SIGTERM/SIGINT,
 // then gracefully shuts down.
 func Serve(cfg Config) error {
+	handler, err := NewHandler(cfg)
+	if err != nil {
+		return err
+	}
 	cfg.withDefaults()
-
-	// Startup gates. Missing JWT secret is fatal when token verification
-	// is required: accepting unverified continuation tokens would let any
-	// caller mint an arbitrary identity and reach handlers as that user.
-	// Tests that need the unverified-parse path can leave RequireToken=false
-	// AND set DECLARION_SIDECAR_ALLOW_UNVERIFIED=1 explicitly.
-	if cfg.JWTSecret == "" {
-		if cfg.RequireToken {
-			return fmt.Errorf("DECLARION_JWT_SECRET is required when RequireToken=true; refusing to start with unverified token parsing")
-		}
-		if os.Getenv("DECLARION_SIDECAR_ALLOW_UNVERIFIED") != "1" {
-			return fmt.Errorf("DECLARION_JWT_SECRET is empty; set the env var or DECLARION_SIDECAR_ALLOW_UNVERIFIED=1 (test-only) to enable unverified token parsing")
-		}
-		cfg.Logger.Warn("DECLARION_JWT_SECRET empty and DECLARION_SIDECAR_ALLOW_UNVERIFIED=1: continuation tokens parsed without signature verification (test-only mode; do not use in production)")
-	}
-	if cfg.PlatformURL == "" {
-		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
-	}
-
-	// A deployment that registers any verifier MUST enable signed-token
-	// verification: verifier calls carry a signed verifier-only token and the
-	// SDK never serves a verifier method unsigned. Fail closed at boot rather
-	// than accept anonymous pre-authentication calls.
-	if registeredVerifierCount() > 0 && cfg.JWTSecret == "" {
-		return fmt.Errorf("DECLARION_JWT_SECRET is required when verifiers are registered; verifier methods are never served without signature verification")
-	}
-
-	registeredCount := registeredHandlerCount()
-
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
-		handleRPC(w, r, &cfg)
-	})
+	mux.Handle("POST /rpc", handler)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -166,7 +144,7 @@ func Serve(cfg Config) error {
 
 	cfg.Logger.Info("sidecar starting",
 		zap.String("addr", cfg.Addr),
-		zap.Int("handlers", registeredCount),
+		zap.Int("handlers", registeredHandlerCount()),
 		zap.Int("verifiers", registeredVerifierCount()),
 	)
 
@@ -199,6 +177,43 @@ func Serve(cfg Config) error {
 
 	cfg.Logger.Info("sidecar stopped")
 	return nil
+}
+
+// NewHandler returns the authenticated JSON-RPC callback handler for a host
+// that owns its own HTTP listener. It applies the same startup checks as Serve;
+// callers must not reimplement the request framing or authentication gate.
+func NewHandler(cfg Config) (http.Handler, error) {
+	cfg.withDefaults()
+
+	// Startup gates. Missing JWT secret is fatal when token verification
+	// is required: accepting unverified continuation tokens would let any
+	// caller mint an arbitrary identity and reach handlers as that user.
+	// Tests that need the unverified-parse path can leave RequireToken=false
+	// AND set DECLARION_SIDECAR_ALLOW_UNVERIFIED=1 explicitly.
+	if cfg.Authenticator == nil && cfg.JWTSecret == "" {
+		if cfg.RequireToken {
+			return nil, fmt.Errorf("DECLARION_JWT_SECRET is required when RequireToken=true; refusing to start with unverified token parsing")
+		}
+		if os.Getenv("DECLARION_SIDECAR_ALLOW_UNVERIFIED") != "1" {
+			return nil, fmt.Errorf("DECLARION_JWT_SECRET is empty; set the env var or DECLARION_SIDECAR_ALLOW_UNVERIFIED=1 (test-only) to enable unverified token parsing")
+		}
+		cfg.Logger.Warn("DECLARION_JWT_SECRET empty and DECLARION_SIDECAR_ALLOW_UNVERIFIED=1: continuation tokens parsed without signature verification (test-only mode; do not use in production)")
+	}
+	if cfg.PlatformURL == "" {
+		cfg.Logger.Warn("DECLARION_PLATFORM_URL not set: ctx.Platform calls will fail")
+	}
+
+	// A deployment that registers any verifier MUST enable signed-token
+	// verification: verifier calls carry a signed verifier-only token and the
+	// SDK never serves a verifier method unsigned. Fail closed at boot rather
+	// than accept anonymous pre-authentication calls.
+	if registeredVerifierCount() > 0 && cfg.JWTSecret == "" {
+		return nil, fmt.Errorf("DECLARION_JWT_SECRET is required when verifiers are registered; verifier methods are never served without signature verification")
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handleRPC(w, r, &cfg)
+	}), nil
 }
 
 func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
@@ -256,48 +271,17 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		}
 	}
 
-	// Enforce RequireToken: reject requests without a valid bearer token.
-	if cfg.RequireToken && token == "" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.unauthorized")))
+	verified, err := cfg.authenticateRequest(r, req.Method)
+	if err != nil {
+		cfg.Logger.Warn("invalid request credential", zap.Error(err), zap.String("method", req.Method))
+		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token")))
 		return
-	}
-
-	// Parse claims from token (identity + authority extraction).
-	var (
-		tenantID, tenantCode, userID, auditOp, action string
-		permissions                                   []string
-		isSuperadmin, isTenantOwner, isGlobalUser     bool
-	)
-	if token != "" {
-		claims, err := parseHandlerToken(token, cfg.JWTSecret)
-		if err != nil {
-			cfg.Logger.Warn("invalid continuation token", zap.Error(err), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token")))
-			return
-		}
-		// Exact-method binding (defense-in-depth): a token minted for one
-		// method cannot be replayed on another. Tolerated empty during rollout
-		// (older Core mints omit the method claim).
-		if claims.Method != "" && claims.Method != req.Method {
-			cfg.Logger.Warn("handler token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
-			writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token")))
-			return
-		}
-		tenantID = claims.TenantID
-		tenantCode = claims.TenantCode
-		userID = claims.UserID
-		auditOp = claims.AuditOpID
-		action = claims.Action
-		permissions = claims.Permissions
-		isSuperadmin = claims.IsSuperadmin
-		isTenantOwner = claims.IsTenantOwner
-		isGlobalUser = claims.IsGlobalUser
 	}
 
 	// Build platform client.
 	platClient := platform.New(platform.Config{
 		BaseURL:     cfg.PlatformURL,
-		Token:       token,
+		Token:       verified.PlatformToken,
 		Traceparent: traceparent,
 		Baggage:     baggage,
 	})
@@ -314,27 +298,32 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 
 	// Build handler context.
 	hctx := &HandlerCtx{
-		Context:  r.Context(),
+		Context:  verified.Context,
 		Platform: platClient,
 		Logger: cfg.Logger.With(
 			zap.String("method", req.Method),
-			zap.String("tenant_id", tenantID),
-			zap.String("user_id", userID),
-			zap.String("audit_op", auditOp),
+			zap.String("tenant_id", verified.Claims.TenantID),
+			zap.String("user_id", verified.Claims.UserID),
+			zap.String("audit_op", verified.Claims.AuditOpID),
 		),
-		TenantID:      tenantID,
-		TenantCode:    tenantCode,
-		UserID:        userID,
-		AuditOp:       auditOp,
-		Action:        action,
-		Permissions:   permissions,
-		IsSuperadmin:  isSuperadmin,
-		IsTenantOwner: isTenantOwner,
-		IsGlobalUser:  isGlobalUser,
-		EntityCode:    reserved.EntityCode,
-		ObjectIDs:     reserved.ObjectIDs,
-		Locale:        reserved.Locale,
-		Baggage:       baggage,
+		TenantID:       verified.Claims.TenantID,
+		TenantCode:     verified.Claims.TenantCode,
+		UserID:         verified.Claims.UserID,
+		AgentID:        verified.Claims.AgentID,
+		RealUserID:     verified.Claims.RealUserID,
+		Roles:          verified.Claims.Roles,
+		AuditOp:        verified.Claims.AuditOpID,
+		Action:         verified.Claims.Action,
+		Permissions:    verified.Claims.Permissions,
+		IsSuperadmin:   verified.Claims.IsSuperadmin,
+		IsTenantOwner:  verified.Claims.IsTenantOwner,
+		IsGlobalUser:   verified.Claims.IsGlobalUser,
+		Attributes:     verified.Claims.Attributes,
+		RoleAttributes: verified.Claims.RoleAttributes,
+		EntityCode:     reserved.EntityCode,
+		ObjectIDs:      reserved.ObjectIDs,
+		Locale:         reserved.Locale,
+		Baggage:        baggage,
 	}
 
 	// Dispatch with params stripped of reserved keys.

@@ -38,9 +38,12 @@ const (
 // Exported so the conformance harness and tests can use the same type.
 type HandlerClaims struct {
 	jwt.RegisteredClaims
-	UserID     string `json:"uid"`
-	TenantID   string `json:"tid"`
-	TenantCode string `json:"tcode"`
+	UserID     string   `json:"uid"`
+	TenantID   string   `json:"tid"`
+	TenantCode string   `json:"tcode"`
+	AgentID    string   `json:"agent_id,omitempty"`
+	RealUserID string   `json:"real_user_id,omitempty"`
+	Roles      []string `json:"roles,omitempty"`
 	// Permissions is the caller's resolved permission list as of token
 	// mint. Sidecar handlers gate fine-grained operations with these.
 	Permissions []string `json:"perms"`
@@ -48,12 +51,14 @@ type HandlerClaims struct {
 	// handlers running inside the SDK enforce authority gates via
 	// these booleans (cross-tenant decisions, owner-reserved actions,
 	// etc.) without re-querying the DB.
-	IsSuperadmin  bool   `json:"is_superadmin,omitempty"`
-	IsTenantOwner bool   `json:"is_tenant_owner,omitempty"`
-	IsGlobalUser  bool   `json:"is_global_user,omitempty"`
-	Action        string `json:"action"`
-	AuditOpID     string `json:"audit_op"`
-	Scope         string `json:"scope"`
+	IsSuperadmin   bool           `json:"is_superadmin,omitempty"`
+	IsTenantOwner  bool           `json:"is_tenant_owner,omitempty"`
+	IsGlobalUser   bool           `json:"is_global_user,omitempty"`
+	Attributes     map[string]any `json:"attr,omitempty"`
+	RoleAttributes map[string]any `json:"rattr,omitempty"`
+	Action         string         `json:"action"`
+	AuditOpID      string         `json:"audit_op"`
+	Scope          string         `json:"scope"`
 	// Method is the exact JSON-RPC method (handler code) this token authorizes.
 	// When present, the serve path enforces claim-method == request-method so a
 	// token minted for one method cannot be replayed on another. Minted by
@@ -150,6 +155,9 @@ type HandlerTokenParams struct {
 	// tenant-pinned; the X-Declarion-Tenant-ID header does NOT override it.
 	TenantID   string
 	TenantCode string
+	AgentID    string
+	RealUserID string
+	Roles      []string
 	// Permissions (perms) is the baked authority snapshot the target action
 	// gates on. Keep it least-privilege.
 	Permissions []string
@@ -159,9 +167,11 @@ type HandlerTokenParams struct {
 	TTL time.Duration
 	// Authority bits, default false. Set only when the acting principal
 	// genuinely holds them; never assert superadmin for a scoped call.
-	IsSuperadmin  bool
-	IsTenantOwner bool
-	IsGlobalUser  bool
+	IsSuperadmin   bool
+	IsTenantOwner  bool
+	IsGlobalUser   bool
+	Attributes     map[string]any
+	RoleAttributes map[string]any
 	// AuditOpID correlates the call in audit; optional.
 	AuditOpID string
 	// Anonymous marks an unauthenticated continuation (UserID may be empty).
@@ -204,18 +214,23 @@ func MintHandlerToken(jwtSecret string, p HandlerTokenParams) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(now.Add(p.TTL + HandlerTokenGrace)),
 			ID:        uuid.NewString(),
 		},
-		UserID:        p.UserID,
-		TenantID:      p.TenantID,
-		TenantCode:    p.TenantCode,
-		Permissions:   p.Permissions,
-		IsSuperadmin:  p.IsSuperadmin,
-		IsTenantOwner: p.IsTenantOwner,
-		IsGlobalUser:  p.IsGlobalUser,
-		Action:        p.Action,
-		AuditOpID:     p.AuditOpID,
-		Scope:         HandlerTokenScope,
-		Method:        p.Action,
-		Anonymous:     p.Anonymous,
+		UserID:         p.UserID,
+		TenantID:       p.TenantID,
+		TenantCode:     p.TenantCode,
+		AgentID:        p.AgentID,
+		RealUserID:     p.RealUserID,
+		Roles:          p.Roles,
+		Permissions:    p.Permissions,
+		IsSuperadmin:   p.IsSuperadmin,
+		IsTenantOwner:  p.IsTenantOwner,
+		IsGlobalUser:   p.IsGlobalUser,
+		Attributes:     p.Attributes,
+		RoleAttributes: p.RoleAttributes,
+		Action:         p.Action,
+		AuditOpID:      p.AuditOpID,
+		Scope:          HandlerTokenScope,
+		Method:         p.Action,
+		Anonymous:      p.Anonymous,
 	}
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(jwtSecret))
 	if err != nil {

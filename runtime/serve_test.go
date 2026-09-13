@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"github.com/disciplinedware/declarion-sdk-go/errs"
 
 	"encoding/json"
@@ -98,6 +99,34 @@ type echoResult struct {
 	Message string `json:"message"`
 }
 
+type testRequestAuthenticator struct {
+	seenMethod string
+	reject     error
+}
+
+func (a *testRequestAuthenticator) Authenticate(r *http.Request, method string) (*AuthenticatedRequest, error) {
+	a.seenMethod = method
+	if a.reject != nil {
+		return nil, a.reject
+	}
+	return &AuthenticatedRequest{
+		Context: context.WithValue(r.Context(), testAuthenticatorContextKey{}, "verified"),
+		Claims: HandlerClaims{
+			TenantID:       "tenant-from-verifier",
+			UserID:         "user-from-verifier",
+			AgentID:        "agent-from-verifier",
+			RealUserID:     "real-user-from-verifier",
+			Roles:          []string{"operator"},
+			Attributes:     map[string]any{"department": "operations"},
+			RoleAttributes: map[string]any{"region": "us-east-1"},
+			Action:         "agent_harness.advance",
+		},
+		PlatformToken: "regular-agent-bearer",
+	}, nil
+}
+
+type testAuthenticatorContextKey struct{}
+
 func TestHandleRPC_success(t *testing.T) {
 	ClearHandlerRegistry()
 	RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
@@ -132,6 +161,55 @@ func TestHandleRPC_success(t *testing.T) {
 	var result echoResult
 	require.NoError(t, json.Unmarshal(resultBytes, &result))
 	assert.Equal(t, "hello world", result.Message)
+}
+
+func TestHandleRPC_UsesInjectedAuthenticator(t *testing.T) {
+	authenticator := &testRequestAuthenticator{}
+	var capturedCtx *HandlerCtx
+	ClearHandlerRegistry()
+	RegisterHandler[echoParams, echoResult]("agent_harness.advance", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
+		capturedCtx = ctx
+		return echoResult{Message: "advanced"}, nil
+	})
+	srv := setupTestServerWithConfig(t, &Config{Authenticator: authenticator})
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":"req-authenticator","method":"agent_harness.advance","params":{"name":"turn"}}`
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/rpc", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer remote-dispatch-jws")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+
+	var rpcResp Response
+	responseBody, _ := io.ReadAll(resp.Body)
+	require.NoError(t, json.Unmarshal(responseBody, &rpcResp))
+	require.Nil(t, rpcResp.Error)
+	require.NotNil(t, capturedCtx)
+	assert.Equal(t, "agent_harness.advance", authenticator.seenMethod)
+	assert.Equal(t, "tenant-from-verifier", capturedCtx.TenantID)
+	assert.Equal(t, "user-from-verifier", capturedCtx.UserID)
+	assert.Equal(t, "agent-from-verifier", capturedCtx.AgentID)
+	assert.Equal(t, "real-user-from-verifier", capturedCtx.RealUserID)
+	assert.Equal(t, []string{"operator"}, capturedCtx.Roles)
+	assert.Equal(t, "operations", capturedCtx.Attributes["department"])
+	assert.Equal(t, "us-east-1", capturedCtx.RoleAttributes["region"])
+	assert.Equal(t, "agent_harness.advance", capturedCtx.Action)
+	assert.Equal(t, "verified", capturedCtx.Context.Value(testAuthenticatorContextKey{}))
+}
+
+func TestNewHandlerRequiresVerificationConfiguration(t *testing.T) {
+	t.Setenv("DECLARION_SIDECAR_ALLOW_UNVERIFIED", "")
+	_, err := NewHandler(Config{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DECLARION_JWT_SECRET")
+}
+
+func TestNewHandlerAcceptsInjectedAuthenticator(t *testing.T) {
+	handler, err := NewHandler(Config{Authenticator: &testRequestAuthenticator{}})
+	require.NoError(t, err)
+	require.NotNil(t, handler)
 }
 
 func TestHandleRPC_method_not_found(t *testing.T) {

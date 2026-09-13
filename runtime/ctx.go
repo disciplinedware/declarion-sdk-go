@@ -27,6 +27,9 @@ type HandlerCtx struct {
 	TenantID   string
 	TenantCode string
 	UserID     string
+	AgentID    string
+	RealUserID string
+	Roles      []string
 	AuditOp    string
 	Action     string
 
@@ -36,9 +39,11 @@ type HandlerCtx struct {
 
 	// Authority dimensions baked into the continuation token at mint.
 	// Mirrors the platform's engine.HandlerCtx.
-	IsSuperadmin  bool
-	IsTenantOwner bool
-	IsGlobalUser  bool
+	IsSuperadmin   bool
+	IsTenantOwner  bool
+	IsGlobalUser   bool
+	Attributes     map[string]any
+	RoleAttributes map[string]any
 
 	// EntityCode is the entity context the platform invoked this handler with.
 	// Populated from the reserved `_entity_code` JSON-RPC param.

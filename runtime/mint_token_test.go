@@ -14,12 +14,17 @@ func TestMintHandlerToken_RoundTrip(t *testing.T) {
 	const tid = "22222222-2222-2222-2222-222222222222"
 
 	tok, err := MintHandlerToken(secret, HandlerTokenParams{
-		UserID:      uid,
-		TenantID:    tid,
-		TenantCode:  "acme",
-		Permissions: []string{"action:llm_connector.invoke"},
-		Action:      "llm_connector.invoke",
-		TTL:         2 * time.Minute,
+		UserID:         uid,
+		TenantID:       tid,
+		TenantCode:     "acme",
+		AgentID:        "33333333-3333-3333-3333-333333333333",
+		RealUserID:     "44444444-4444-4444-4444-444444444444",
+		Roles:          []string{"operator"},
+		Permissions:    []string{"action:llm_connector.invoke"},
+		Attributes:     map[string]any{"department": "operations"},
+		RoleAttributes: map[string]any{"region": "us-east-1"},
+		Action:         "llm_connector.invoke",
+		TTL:            2 * time.Minute,
 	})
 	if err != nil {
 		t.Fatalf("mint: %v", err)
@@ -34,6 +39,15 @@ func TestMintHandlerToken_RoundTrip(t *testing.T) {
 	}
 	if claims.TenantID != tid {
 		t.Errorf("tid = %q, want %q", claims.TenantID, tid)
+	}
+	if claims.AgentID != "33333333-3333-3333-3333-333333333333" || claims.RealUserID != "44444444-4444-4444-4444-444444444444" {
+		t.Errorf("agent/real user = %q/%q", claims.AgentID, claims.RealUserID)
+	}
+	if len(claims.Roles) != 1 || claims.Roles[0] != "operator" {
+		t.Errorf("roles = %v", claims.Roles)
+	}
+	if claims.Attributes["department"] != "operations" || claims.RoleAttributes["region"] != "us-east-1" {
+		t.Errorf("attributes = %v/%v", claims.Attributes, claims.RoleAttributes)
 	}
 	if claims.Action != "llm_connector.invoke" || claims.Method != "llm_connector.invoke" {
 		t.Errorf("action/method = %q/%q", claims.Action, claims.Method)
