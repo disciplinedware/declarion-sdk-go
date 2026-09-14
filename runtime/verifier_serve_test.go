@@ -240,7 +240,9 @@ func TestHandlerToken_MethodBinding(t *testing.T) {
 	resp := postRPC(t, srv.URL, body, map[string]string{"Authorization": "Bearer " + token})
 	require.NotNil(t, resp.Error)
 	assert.Equal(t, "auth.invalid_token", resp.Error.Message)
-	assert.Contains(t, loggedReason(t, logs), "method mismatch")
+	entries := logs.All()
+	require.NotEmpty(t, entries)
+	assert.Contains(t, fmt.Sprint(entries[len(entries)-1].ContextMap()["error"]), "method mismatch")
 }
 
 func TestServe_VerifierRequiresSignedBoot(t *testing.T) {
