@@ -1,9 +1,11 @@
 package platform
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 
@@ -152,5 +154,36 @@ func (t mcpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return base.RoundTrip(cloned)
+	response, err := base.RoundTrip(cloned)
+	if err != nil || response.StatusCode < 400 {
+		return response, err
+	}
+	// The platform answers a refusal as a problem document naming what it
+	// refused. The MCP library reports the bare status text, so a caller was
+	// told "Forbidden" and had no way to learn which rule said so.
+	return response, refusalFrom(response)
+}
+
+// refusalFrom reads the platform's problem document off a refused response and
+// states what it said. The body is put back, so the caller still sees the
+// response it would have seen.
+func refusalFrom(response *http.Response) error {
+	body, err := io.ReadAll(io.LimitReader(response.Body, 8192))
+	_ = response.Body.Close()
+	response.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil || len(body) == 0 {
+		return fmt.Errorf("platform refused the MCP request: %s", response.Status)
+	}
+	var problem struct {
+		Type   string `json:"type"`
+		Title  string `json:"title"`
+		Detail string `json:"detail"`
+	}
+	if json.Unmarshal(body, &problem) != nil || problem.Title == "" {
+		return fmt.Errorf("platform refused the MCP request: %s: %s", response.Status, string(body))
+	}
+	if problem.Detail != "" {
+		return fmt.Errorf("platform refused the MCP request: %s (%s): %s", problem.Title, problem.Type, problem.Detail)
+	}
+	return fmt.Errorf("platform refused the MCP request: %s (%s)", problem.Title, problem.Type)
 }
