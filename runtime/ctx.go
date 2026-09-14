@@ -15,7 +15,7 @@ type HandlerCtx struct {
 	Context context.Context
 
 	// Platform provides typed access to Declarion's data and action APIs.
-	// All outbound calls auto-attach the continuation token and trace headers.
+	// All outbound calls auto-attach the authenticated platform token and trace headers.
 	Platform *platform.Client
 
 	// Logger is a structured zap logger pre-tagged with handler,

@@ -81,6 +81,14 @@ func main() {
 }
 ```
 
+## Platform MCP
+
+`ctx.Platform.MCP().Connect(ctx.Context)` opens Declarion's `/api/mcp` endpoint
+with the handler's platform token, tenant scope and trace headers. The returned
+session supports `ListTools`, `CallTool` and `Close`. It keeps requests on that
+endpoint and refuses HTTP redirects, so the token cannot follow a server-supplied
+location.
+
 ## YAML wiring
 
 Declare the handlers in your consumer app's schema:

@@ -152,6 +152,13 @@ func (c *Client) Params() *ParamsClient {
 	return &ParamsClient{c: c}
 }
 
+// MCP returns the client for Declarion's Model Context Protocol endpoint.
+// It uses the same bearer, trace, and tenant scope as the other platform
+// clients.
+func (c *Client) MCP() *MCPClient {
+	return &MCPClient{c: c}
+}
+
 // newRequest builds an *http.Request with the platform's auth, trace, and
 // target-tenant headers applied. Shared by the buffered `do` path and the
 // streaming Actions().InvokeStreaming path so header construction and the
@@ -189,6 +196,16 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
+	if err := c.applyHeaders(req, ro); err != nil {
+		return nil, err
+	}
+	return req, nil
+}
+
+func (c *Client) applyHeaders(req *http.Request, ro requestOptions) error {
+	if ro.tenantID != "" && ro.tenantCode != "" {
+		return fmt.Errorf("platform client: target tenant id and code are mutually exclusive")
+	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -205,8 +222,8 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 	if ro.tenantCode != "" {
 		req.Header.Set(TargetTenantCodeHeader, ro.tenantCode)
 	}
-	setForwardedFor(req, ctx)
-	return req, nil
+	setForwardedFor(req, req.Context())
+	return nil
 }
 
 // do executes an HTTP request with all required headers and buffers the
