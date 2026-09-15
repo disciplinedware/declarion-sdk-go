@@ -6,6 +6,16 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Added
+
+- **`platform.Client.MCP()` reaches Declarion's MCP endpoint under the client's own bearer, trace and tenant.** `MCPClient.Connect` opens a request-response session; tools and call results arrive typed (`MCPTool`, `MCPCallResult`), and each content item keeps its raw JSON so no MCP content variant is lost.
+- **A host can verify callback requests itself.** `runtime.Config.Authenticator` takes a `RequestAuthenticator`, which verifies one JSON-RPC request after its method is known and returns the authority and callback token (`AuthenticatedRequest`); `runtime.NewHandler` serves the authenticated handler. `HandlerClaims` carries `AgentID`, `RealUserID`, `Roles`, `Attributes` and `RoleAttributes`, and the minted token carries the matching claims.
+- **A platform call names the client that reached the service.** `platform.WithOriginatingClientIP` puts the peer address the service observed on the context once; every request built under it sets `X-Forwarded-For` to that one address, overwriting any inbound value, and a chain, hostname or unparseable value is dropped. The platform honours it only from a trusted proxy.
+
+### Fixed
+
+- **A refused MCP request says which rule refused it.** The transport read only the status text - `Forbidden` - while the platform answered a problem document; the error now states its title and type, and the body is returned to the caller unchanged.
+
 ### Changed
 
 - **A money read uses `Lookup`, not `GetParam`.** `GetParam` cannot tell an absent value from a deliberate one - not-found returns the caller's default and reports success - so a missing price read with a zero default returns zero and looks fine. `platform.GetParam` now documents that, and what each typed parameter arrives as: a `decimal` as its exact canonical TEXT, an `enum` as the member code, a `string_array` as a `[]string`. Reading a decimal into a float type FAILS, deliberately: the text is exact and a float64 is not. No API change.
