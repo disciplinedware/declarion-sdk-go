@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.22.0] - 2026-09-15
+
 ### Added
 
 - **`platform.Client.MCP()` reaches Declarion's MCP endpoint under the client's own bearer, trace and tenant.** `MCPClient.Connect` opens a request-response session; tools and call results arrive typed (`MCPTool`, `MCPCallResult`), and each content item keeps its raw JSON so no MCP content variant is lost.
