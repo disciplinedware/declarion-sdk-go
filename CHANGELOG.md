@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `testsdk` context reaches the platform again.** The minted handler token carried `AuditOpID: "test-audit"`, and the platform reads that claim as the audit operation's UUID key: since core 0.54.1 every dispatch from this harness was refused `action.invalid_params`, whatever the consumer's own code did. The claim is a fresh UUID per context now.
+
 ## [v0.22.0] - 2026-09-15
 
 ### Added

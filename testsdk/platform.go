@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -329,8 +330,11 @@ func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string, isGlobalUse
 		TenantID:   tenantID,
 		TenantCode: tenantCode,
 		Action:     "test",
-		AuditOpID:  "test-audit",
-		Scope:      runtime.HandlerTokenScope,
+		// The platform reads this as the audit operation's UUID key and refuses
+		// a dispatch carrying anything else, so a fixed label made every call
+		// from this harness an action.invalid_params.
+		AuditOpID: uuid.NewString(),
+		Scope:     runtime.HandlerTokenScope,
 		// The test actor carries full authority: integration tests exercise
 		// handler logic against a real platform, not the RBAC layer, so the
 		// actor never fights permission or role seeds.
