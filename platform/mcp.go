@@ -1,7 +1,6 @@
 package platform
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -161,16 +160,15 @@ func (t mcpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// The platform answers a refusal as a problem document naming what it
 	// refused. The MCP library reports the bare status text, so a caller was
 	// told "Forbidden" and had no way to learn which rule said so.
-	return response, refusalFrom(response)
+	return nil, refusalFrom(response)
 }
 
 // refusalFrom reads the platform's problem document off a refused response and
-// states what it said. The body is put back, so the caller still sees the
-// response it would have seen.
+// states what it said. The response is consumed here: a RoundTripper answering
+// with both a response and an error has its response discarded by the client.
 func refusalFrom(response *http.Response) error {
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8192))
 	_ = response.Body.Close()
-	response.Body = io.NopCloser(bytes.NewReader(body))
 	if err != nil || len(body) == 0 {
 		return fmt.Errorf("platform refused the MCP request: %s", response.Status)
 	}
