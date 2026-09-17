@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Go 1.27.1**, matching the rest of the stack.
+
 ## [v0.22.1] - 2026-09-16
 
 ### Fixed
