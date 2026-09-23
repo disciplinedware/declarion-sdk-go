@@ -69,12 +69,14 @@ func (p *ParamsClient) Lookup(ctx context.Context, code string) (value any, foun
 //
 // # Reading a typed parameter
 //
-// A decimal arrives as its canonical TEXT, an enum as the member code, and a
-// list as a []string:
+// A value arrives in the one form the platform stores for its type: a decimal,
+// an instant, a date, a time, a uuid, a reference key and bytes as TEXT, an enum
+// as the member code, a list as a slice, and a language map as a map:
 //
 //	price, err := platform.GetParam[string](p, ctx, "default_unit_price", "")
 //	backend, err := platform.GetParam[string](p, ctx, "mailer_backend", "noop")
 //	models, err := platform.GetParam[[]string](p, ctx, "allowed_models", nil)
+//	badges, err := platform.GetParam[[]map[string]string](p, ctx, "landing_badges", nil)
 //
 // Reading a decimal as a float type FAILS, and that is deliberate: the text is
 // exact and a float64 is not, so the conversion that would lose the digits is
