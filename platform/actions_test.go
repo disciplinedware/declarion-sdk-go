@@ -24,7 +24,7 @@ func TestActionsInvokeSendsTargetTenantCodeHeader(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Actions().Invoke(t.Context(), "test.action", InvokeParams{
 		Args:             map[string]any{"x": "y"},
 		TargetTenantCode: "default",
@@ -49,7 +49,7 @@ func TestActionsInvoke_promotes_ids_to_object_ids(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Actions().Invoke(t.Context(), "lead.archive", InvokeParams{
 		Args: map[string]any{"reason": "duplicate"},
 		IDs:  []string{"u1", "u2"},

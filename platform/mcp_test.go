@@ -46,6 +46,7 @@ func TestMCPClientUsesPlatformAuthorizationForCatalogAndCall(t *testing.T) {
 		Token:          "turn-bearer",
 		Traceparent:    "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
 		TargetTenantID: "tenant-1",
+		HTTPClient:     httpServer.Client(),
 	})
 	session, err := client.MCP().Connect(context.Background())
 	if err != nil {
@@ -91,7 +92,7 @@ func TestMCPClientDoesNotForwardBearerOnRedirect(t *testing.T) {
 	}))
 	defer platform.Close()
 
-	client := New(Config{BaseURL: platform.URL, Token: "turn-bearer"})
+	client := New(Config{BaseURL: platform.URL, Token: "turn-bearer", HTTPClient: platform.Client()})
 	if _, err := client.MCP().Connect(context.Background()); err == nil {
 		t.Fatal("redirected MCP connection succeeded")
 	}

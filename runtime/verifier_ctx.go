@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"go.uber.org/zap"
@@ -65,10 +66,11 @@ type VerifierCtx struct {
 	// PlatformFor.
 	Platform *platform.Client
 
-	// runAs / platformURL back PlatformFor. Kept unexported: a verifier gets the
-	// credential's REACH, never the credential itself.
-	runAs       string
-	platformURL string
+	// runAs / platformURL / platformHTTP back PlatformFor. Kept unexported: a
+	// verifier gets the credential's REACH, never the credential itself.
+	runAs        string
+	platformURL  string
+	platformHTTP *http.Client
 }
 
 // PlatformFor returns a platform client that reads in the named tenant, under the
@@ -91,6 +93,7 @@ func (c *VerifierCtx) PlatformFor(tenantID string) *platform.Client {
 		BaseURL:        c.platformURL,
 		Token:          c.runAs,
 		TargetTenantID: tenantID,
+		HTTPClient:     c.platformHTTP,
 	})
 }
 

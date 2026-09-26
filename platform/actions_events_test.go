@@ -23,7 +23,7 @@ func TestInvokeCarriesTheChainReport(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res, err := New(Config{BaseURL: srv.URL}).Actions().Invoke(context.Background(), "lead.upsert", InvokeParams{})
+	res, err := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()}).Actions().Invoke(context.Background(), "lead.upsert", InvokeParams{})
 	require.NoError(t, err)
 	assert.Equal(t, "success", res.Status, "a failed event does not fail the parent: it committed")
 
@@ -45,7 +45,7 @@ func TestNoChainMeansNoReport(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	res, err := New(Config{BaseURL: srv.URL}).Actions().Invoke(context.Background(), "lead.upsert", InvokeParams{})
+	res, err := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()}).Actions().Invoke(context.Background(), "lead.upsert", InvokeParams{})
 	require.NoError(t, err)
 	assert.Nil(t, res.Events)
 	assert.False(t, res.Events.Failed(), "nil is not a failure, and asking must not panic")

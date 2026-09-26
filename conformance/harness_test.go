@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,9 +22,9 @@ func TestGoSDKPassesConformanceSuite(t *testing.T) {
 	RegisterConformanceSidecarHandlers()
 
 	// Start the sidecar in-process using httptest.
-	cfg := &runtime.Config{}
+	cfg := &runtime.Config{PlatformIdleConnTimeout: 30 * time.Second}
 	cfg.SetJWTSecret(jwtSecret) // same secret the harness uses
-	cfg.ApplyDefaults()
+	require.NoError(t, cfg.PrepareForTest())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {

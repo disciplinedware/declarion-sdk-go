@@ -14,7 +14,7 @@ func paramServer(t *testing.T, body string) *Client {
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
-	return New(Config{BaseURL: srv.URL})
+	return New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 }
 
 // TestGetParam_typedReads pins what a consumer receives for each of the three

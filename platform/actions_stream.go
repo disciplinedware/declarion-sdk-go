@@ -99,10 +99,10 @@ type ActionStream struct {
 	// no terminal - so a count that came only from there reports zero after a
 	// partial answer, and a caller cannot tell "nothing arrived" from "some
 	// did".
-	received Delivered
-	err           error
-	done          bool
-	delivered     Delivered
+	received  Delivered
+	err       error
+	done      bool
+	delivered Delivered
 	// closed is atomic because Close may be called from another goroutine to
 	// unblock a stalled Next (the idiomatic streaming-reader contract). Every
 	// other field is owned by the single Next-calling goroutine.

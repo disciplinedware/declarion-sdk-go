@@ -87,6 +87,8 @@ func setupTestServerWithConfig(t *testing.T, cfg *Config) *httptest.Server {
 func startInProcessServer(t *testing.T, cfg *Config) *httptest.Server {
 	t.Helper()
 	t.Cleanup(ClearHandlerRegistry)
+	cfg.PlatformIdleConnTimeout = testPlatformIdleConnTimeout
+	require.NoError(t, cfg.connectPlatform())
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rpc", func(w http.ResponseWriter, r *http.Request) {
 		handleRPC(w, r, cfg)
@@ -210,7 +212,7 @@ func TestNewHandlerRequiresVerificationConfiguration(t *testing.T) {
 }
 
 func TestNewHandlerAcceptsInjectedAuthenticator(t *testing.T) {
-	handler, err := NewHandler(Config{Authenticator: &testRequestAuthenticator{}})
+	handler, err := NewHandler(Config{Authenticator: &testRequestAuthenticator{}, PlatformIdleConnTimeout: testPlatformIdleConnTimeout})
 	require.NoError(t, err)
 	require.NotNil(t, handler)
 }

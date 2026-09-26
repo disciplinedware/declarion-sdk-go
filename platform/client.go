@@ -51,7 +51,12 @@ type Config struct {
 	// exclusive with TargetTenantID.
 	TargetTenantCode string
 
-	// HTTPClient overrides the default HTTP client. Useful for testing.
+	// HTTPClient carries every request. Required, with a Transport built by
+	// NewTransport. Share one across clients: each per-token client then reuses
+	// the same connection pool. Leave its Timeout zero - a request is bounded by
+	// its context, and a client-level Timeout silently overrides that context: a
+	// 60 s cap once cut an 85 s connector inference the server kept running and
+	// charging, and the caller's retry charged it twice.
 	HTTPClient *http.Client
 }
 
@@ -67,21 +72,14 @@ type Client struct {
 	http        *http.Client
 }
 
-// New creates a platform client with the given config.
+// New creates a platform client with the given config. It panics when
+// cfg.HTTPClient or its Transport is nil: Go's default transport keeps an idle
+// connection 90 s, longer than the platform does, and a missing client is a
+// wiring defect no request can recover from.
 func New(cfg Config) *Client {
 	httpClient := cfg.HTTPClient
-	if httpClient == nil {
-		// No hard client-level timeout. Every request is issued via
-		// http.NewRequestWithContext (see do()), so the caller's CONTEXT deadline
-		// is the single source of truth for how long a call may run. A fixed
-		// http.Client.Timeout is a HARD cap that silently overrides that context:
-		// the previous 60s default cut long-but-legitimate calls (e.g. an 85s
-		// LLM-connector inference whose action declares a 10m server timeout) at
-		// 60s, while the server kept running the detached, already-charged request
-		// - so the caller saw a transient error and could retry into a double
-		// charge. Callers pass a bounded context; server-side action timeouts
-		// bound anything that would otherwise hang.
-		httpClient = &http.Client{}
+	if httpClient == nil || httpClient.Transport == nil {
+		panic("platform.New: Config.HTTPClient with a Transport from platform.NewTransport is required")
 	}
 	return &Client{
 		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),

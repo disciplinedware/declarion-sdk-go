@@ -69,8 +69,9 @@ func handleLoad(ctx *sdk.HandlerCtx, p LoadParams) (LoadResult, error) {
 
 func main() {
     err := sdk.Serve(sdk.Config{
-        Addr:        ":8080",
-        PlatformURL: "http://declarion:3000",
+        Addr:                    ":8080",
+        PlatformURL:             "http://declarion:3000",
+        PlatformIdleConnTimeout: 30 * time.Second,
     },
         sdk.Handler("myapp.fetch", handleFetch),
         sdk.Handler("myapp.load", handleLoad),
@@ -80,6 +81,19 @@ func main() {
     }
 }
 ```
+
+## Connection to the platform
+
+Every `platform.Client` needs `Config.HTTPClient` with a transport from
+`platform.NewTransport(idleConnTimeout)`; `platform.New` panics without one.
+Share one client across the per-token clients so they share one pool.
+
+`idleConnTimeout` is the caller's declared setting and must be shorter than the
+platform's `http_idle_timeout` (60 s by default). The platform closes a
+connection idle that long; a client that keeps it longer sends its next request
+down a closed socket and gets `connection reset by peer` or `EOF`, and Go does
+not retry a POST. Go's default transport keeps idle connections 90 s, so it is
+never used.
 
 ## Platform MCP
 
@@ -429,6 +443,7 @@ go test ./conformance/ -v
 | Variable | Description | Default |
 |---|---|---|
 | `DECLARION_PLATFORM_URL` | Platform base URL for callbacks | (required) |
+| `DECLARION_PLATFORM_IDLE_CONN_TIMEOUT` | How long a connection to the platform stays pooled unused, as a Go duration; read when `Config.PlatformIdleConnTimeout` is zero | (required) |
 | `DECLARION_JWT_SECRET` | JWT secret for token verification | (empty = no verification) |
 | `DECLARION_SIDECAR_ADDR` | Listen address | `:8080` |
 

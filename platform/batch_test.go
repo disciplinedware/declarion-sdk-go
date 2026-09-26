@@ -166,7 +166,7 @@ func TestBatch_Update_wire_puts_object_ids_top_level(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	resp, err := c.NewBatch().
 		Update("lead", []string{"u1"}, map[string]any{"name": "x"}).
 		Execute(t.Context())
@@ -226,7 +226,7 @@ func TestBatch_BuilderCallAndCreate(t *testing.T) {
 }
 
 func TestBatch_ExecuteEmpty(t *testing.T) {
-	c := New(Config{BaseURL: "http://unused.local"})
+	c := New(Config{BaseURL: "http://unused.local", HTTPClient: &http.Client{Transport: http.DefaultTransport}})
 	if _, err := c.NewBatch().Execute(t.Context()); err == nil {
 		t.Fatal("Execute with no ops: want error, got nil")
 	}
@@ -261,7 +261,7 @@ func TestBatch_ExecuteRoundtrip(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	resp, err := c.NewBatch().
 		Call("myapp.actions.http_request", map[string]any{"url": "https://example.com"}).
 		Execute(t.Context())
@@ -294,7 +294,7 @@ func TestBatch_ExecuteSendsTargetTenantHeader(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.NewBatch().
 		WithTargetTenantID(targetTenantID).
 		Call("a.b", nil).
@@ -320,7 +320,7 @@ func TestBatch_ExecuteSurfacesLogicalFailure(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	resp, err := c.NewBatch().
 		Call("a.b", nil).
 		Call("c.d", nil).
@@ -348,7 +348,7 @@ func TestBatch_ExecuteHTTPErrorReturnsError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.NewBatch().Call("x.y", nil).Execute(t.Context())
 	// `{"error":"boom"}` is not an error object, so it is not the platform
 	// speaking - it takes the client's own transport type, carrying the status

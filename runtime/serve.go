@@ -54,6 +54,16 @@ type Config struct {
 	// Required for ctx.Platform to work. Read from DECLARION_PLATFORM_URL env if empty.
 	PlatformURL string
 
+	// PlatformIdleConnTimeout closes a connection to the platform once it has
+	// been idle this long. Required: read from DECLARION_PLATFORM_IDLE_CONN_TIMEOUT
+	// (a Go duration) when zero, and refused when neither is set. It must be below
+	// the platform's http_idle_timeout - platform.NewTransport says why.
+	PlatformIdleConnTimeout time.Duration
+
+	// platformHTTP is the one client every ctx.Platform shares, built by
+	// connectPlatform from PlatformIdleConnTimeout.
+	platformHTTP *http.Client
+
 	// JWTSecret is the shared JWT signing key for verifying continuation tokens.
 	// When empty, tokens are decoded without signature verification (trusts network boundary).
 	// Read from DECLARION_JWT_SECRET env if empty.
@@ -107,6 +117,30 @@ func (c *Config) withDefaults() {
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = 10 * time.Second
 	}
+}
+
+const envPlatformIdleConnTimeout = "DECLARION_PLATFORM_IDLE_CONN_TIMEOUT"
+
+// connectPlatform builds the client every ctx.Platform shares. An unset or
+// unparsable idle timeout is refused, never replaced by a default.
+func (c *Config) connectPlatform() error {
+	if c.PlatformIdleConnTimeout == 0 {
+		raw := os.Getenv(envPlatformIdleConnTimeout)
+		if raw == "" {
+			return fmt.Errorf("%s is required: set it below the platform's http_idle_timeout, or set Config.PlatformIdleConnTimeout", envPlatformIdleConnTimeout)
+		}
+		parsed, err := time.ParseDuration(raw)
+		if err != nil {
+			return fmt.Errorf("%s=%q is not a duration: %w", envPlatformIdleConnTimeout, raw, err)
+		}
+		c.PlatformIdleConnTimeout = parsed
+	}
+	transport, err := platform.NewTransport(c.PlatformIdleConnTimeout)
+	if err != nil {
+		return fmt.Errorf("%s: %w", envPlatformIdleConnTimeout, err)
+	}
+	c.platformHTTP = &http.Client{Transport: transport}
+	return nil
 }
 
 // Serve starts the JSON-RPC sidecar server using every function registered
@@ -210,6 +244,9 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if registeredVerifierCount() > 0 && cfg.JWTSecret == "" {
 		return nil, fmt.Errorf("DECLARION_JWT_SECRET is required when verifiers are registered; verifier methods are never served without signature verification")
 	}
+	if err := cfg.connectPlatform(); err != nil {
+		return nil, err
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handleRPC(w, r, &cfg)
@@ -284,6 +321,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		Token:       verified.PlatformToken,
 		Traceparent: traceparent,
 		Baggage:     baggage,
+		HTTPClient:  cfg.platformHTTP,
 	})
 
 	// Extract reserved keys from JSON-RPC params before the handler's typed
@@ -383,6 +421,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 			Token:       runAs,
 			Traceparent: r.Header.Get("traceparent"),
 			Baggage:     r.Header.Get("baggage"),
+			HTTPClient:  cfg.platformHTTP,
 		})
 	}
 
@@ -402,6 +441,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 		Platform:      platClient,
 		runAs:         runAs,
 		platformURL:   cfg.PlatformURL,
+		platformHTTP:  cfg.platformHTTP,
 	}
 
 	result, err := fn(vctx)

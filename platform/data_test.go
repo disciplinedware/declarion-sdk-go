@@ -42,7 +42,7 @@ func TestList_unmarshal_envelope(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	resp, err := c.Data().List(t.Context(), "lead", ListParams{Limit: 50})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -78,7 +78,7 @@ func TestList_cursor_meta(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	resp, err := c.Data().List(t.Context(), "lead", ListParams{Limit: 1})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -101,7 +101,7 @@ func TestList_query_params(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Data().List(t.Context(), "lead", ListParams{
 		Limit:          50,
 		After:          "cursor-abc",
@@ -168,7 +168,7 @@ func TestList_omits_empty_params(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Data().List(t.Context(), "lead", ListParams{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -192,7 +192,7 @@ func TestList_offset_mode_params(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	resp, err := c.Data().List(t.Context(), "lead", ListParams{Page: 3, PerPage: 20, Sort: "name"})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -217,7 +217,7 @@ func TestList_http_error(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Data().List(t.Context(), "lead", ListParams{
 		Filters: []FilterNode{{Field: "x", Op: "pwn"}},
 	})
@@ -286,7 +286,7 @@ func TestBulkCreate_flat_envelope(t *testing.T) {
 		"audit_operation_id": "op-create"
 	}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	res, err := c.Data().BulkCreate(t.Context(), "lead", map[string]any{"name": "Alice"})
 	if err != nil {
 		t.Fatalf("BulkCreate: %v", err)
@@ -328,7 +328,7 @@ func TestBulkCreate_rejects_empty_inputs(t *testing.T) {
 		t.Fatalf("server must not be hit on empty-input rejection")
 	}))
 	t.Cleanup(srv.Close)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkCreate(t.Context(), "", map[string]any{"x": 1}); err == nil {
 		t.Error("BulkCreate with empty entity: want error")
 	}
@@ -351,7 +351,7 @@ func TestBulkUpsert_flat_envelope(t *testing.T) {
 		}
 	}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	res, err := c.Data().BulkUpsert(
 		t.Context(),
 		"lead",
@@ -393,7 +393,7 @@ func TestBulkUpsert_flat_envelope(t *testing.T) {
 // unset WithMode option does NOT emit `mode: ""` (server would reject "").
 func TestBulkUpsert_omits_mode_when_unset(t *testing.T) {
 	srv, cap := newCaptureServer(t, `{"status":"success","result":{"rows":[]}}`)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkUpsert(t.Context(), "lead",
 		map[string]any{"email": "a@x"},
 		[]string{"email"},
@@ -411,7 +411,7 @@ func TestBulkUpsert_rejects_empty_inputs(t *testing.T) {
 		t.Fatalf("server must not be hit on empty-input rejection")
 	}))
 	t.Cleanup(srv.Close)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkUpsert(t.Context(), "", map[string]any{"x": 1}, []string{"x"}); err == nil {
 		t.Error("empty entity: want error")
 	}
@@ -442,7 +442,7 @@ func TestBulkUpdate_flat_envelope(t *testing.T) {
 		"audit_operation_id": "op-upd"
 	}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	res, err := c.Data().BulkUpdate(
 		t.Context(),
 		"lead",
@@ -495,7 +495,7 @@ func TestBulkUpdate_flat_envelope(t *testing.T) {
 // noises the wire.
 func TestBulkUpdate_omits_optional_fields(t *testing.T) {
 	srv, cap := newCaptureServer(t, `{"status":"success","result":{"rows":[],"rows_matched":0}}`)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkUpdate(t.Context(), "lead",
 		[]string{"u1"},
 		map[string]any{"name": "x"},
@@ -520,7 +520,7 @@ func TestBulkUpdate_propagates_http_error(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Data().BulkUpdate(t.Context(), "lead", []string{"u1"}, map[string]any{"name": "x"})
 	if err == nil {
 		t.Fatal("BulkUpdate: want error on 422")
@@ -548,7 +548,7 @@ func TestBulkUpdate_rejects_empty_inputs(t *testing.T) {
 		t.Fatalf("server must not be hit on empty-input rejection")
 	}))
 	t.Cleanup(srv.Close)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkUpdate(t.Context(), "", []string{"u1"}, map[string]any{"x": 1}); err == nil {
 		t.Error("empty entity: want error")
 	}
@@ -571,7 +571,7 @@ func TestBulkDelete_flat_envelope(t *testing.T) {
 		"audit_operation_id": "op-del"
 	}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	res, err := c.Data().BulkDelete(t.Context(), "lead", []string{"u1", "u2"})
 	if err != nil {
 		t.Fatalf("BulkDelete: %v", err)
@@ -606,7 +606,7 @@ func TestBulkDelete_rejects_empty_inputs(t *testing.T) {
 		t.Fatalf("server must not be hit on empty-input rejection")
 	}))
 	t.Cleanup(srv.Close)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkDelete(t.Context(), "", []string{"u1"}); err == nil {
 		t.Error("empty entity: want error")
 	}
@@ -624,7 +624,7 @@ func TestBulkDelete_rejects_empty_inputs(t *testing.T) {
 func TestBulkDelete_where_sends_filters(t *testing.T) {
 	srv, cap := newCaptureServer(t, `{"status":"success","result":{"deleted":7}}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	res, err := c.Data().BulkDelete(t.Context(), "arm_result", nil,
 		DeleteWhere(Eq("backtest_id", "b1"), Eq("execution_origin", "backtest")))
 	if err != nil {
@@ -654,7 +654,7 @@ func TestBulkDelete_where_sends_filters(t *testing.T) {
 func TestBulkDelete_ids_and_filters_together(t *testing.T) {
 	srv, cap := newCaptureServer(t, `{"status":"success","result":{"deleted":1}}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkDelete(t.Context(), "lead", []string{"u1"},
 		DeleteWhere(Eq("stage", "won"))); err != nil {
 		t.Fatalf("BulkDelete: %v", err)
@@ -677,7 +677,7 @@ func TestBulkDelete_propagates_http_error(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Data().BulkDelete(t.Context(), "lead", []string{"u1"})
 	if err == nil {
 		t.Fatal("BulkDelete: want error on 403")
@@ -707,7 +707,7 @@ func TestBulkRestore_flat_envelope(t *testing.T) {
 		"audit_operation_id": "op-restore"
 	}`)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	res, err := c.Data().BulkRestore(t.Context(), "lead", []string{"u1"})
 	if err != nil {
 		t.Fatalf("BulkRestore: %v", err)
@@ -739,7 +739,7 @@ func TestBulkRestore_rejects_empty_inputs(t *testing.T) {
 		t.Fatalf("server must not be hit on empty-input rejection")
 	}))
 	t.Cleanup(srv.Close)
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkRestore(t.Context(), "", []string{"u1"}); err == nil {
 		t.Error("empty entity: want error")
 	}

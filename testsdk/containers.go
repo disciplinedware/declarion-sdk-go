@@ -306,10 +306,19 @@ func startContainers(cfg *config) (*PlatformEnv, error) {
 
 	cfg.logger.Info("platform started", zap.String("url", url))
 
+	httpClient, err := newPlatformHTTPClient()
+	if err != nil {
+		_ = declarionContainer.Terminate(ctx)
+		_ = pgContainer.Terminate(ctx)
+		_ = net.Remove(ctx)
+		cleanupModuleBundle()
+		return nil, err
+	}
 	env := &PlatformEnv{
 		URL:             url,
 		JWTSecret:       cfg.jwtSecret,
 		databaseURL:     hostDBURL,
+		httpClient:      httpClient,
 		logger:          cfg.logger,
 		serverContainer: declarionContainer,
 		stopFn: func() {

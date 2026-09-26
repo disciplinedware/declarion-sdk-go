@@ -46,7 +46,7 @@ func sseServer(t *testing.T, body string) *httptest.Server {
 
 func streamClient(t *testing.T, srv *httptest.Server) *Client {
 	t.Helper()
-	return New(Config{BaseURL: srv.URL})
+	return New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 }
 
 // parseStream drives an ActionStream to completion and returns the frames.

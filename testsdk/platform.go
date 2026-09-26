@@ -39,6 +39,7 @@ type PlatformEnv struct {
 	JWTSecret string
 
 	databaseURL     string
+	httpClient      *http.Client
 	stopFn          func()
 	logger          *zap.Logger
 	serverContainer interface {
@@ -170,10 +171,15 @@ func StartPlatform(opts ...Option) (*PlatformEnv, error) {
 		if secret == "" {
 			secret = cfg.jwtSecret
 		}
+		httpClient, err := newPlatformHTTPClient()
+		if err != nil {
+			return nil, err
+		}
 		env := &PlatformEnv{
 			URL:         strings.TrimRight(url, "/"),
 			JWTSecret:   secret,
 			databaseURL: os.Getenv("DECLARION_TEST_DATABASE_URL"),
+			httpClient:  httpClient,
 			stopFn:      func() {},
 			logger:      cfg.logger,
 		}
@@ -186,6 +192,19 @@ func StartPlatform(opts ...Option) (*PlatformEnv, error) {
 
 	// Container mode: start via testcontainers-go.
 	return startContainers(cfg)
+}
+
+// platformIdleConnTimeout is below the http_idle_timeout the harness's
+// platform runs with (its declared default, 60 s): platform.NewTransport says
+// why it must be.
+const platformIdleConnTimeout = 30 * time.Second
+
+func newPlatformHTTPClient() (*http.Client, error) {
+	transport, err := platform.NewTransport(platformIdleConnTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("platform transport: %w", err)
+	}
+	return &http.Client{Transport: transport}, nil
 }
 
 // Stop shuts down containers (no-op in external mode).
@@ -263,8 +282,9 @@ func (e *PlatformEnv) NewCtx(t *testing.T, opts ...CtxOption) *runtime.HandlerCt
 	token := e.mintToken(cfg.tenantID, cfg.tenantCode, cfg.userID, cfg.isGlobalUser)
 
 	platClient := platform.New(platform.Config{
-		BaseURL: e.URL,
-		Token:   token,
+		BaseURL:    e.URL,
+		Token:      token,
+		HTTPClient: e.httpClient,
 	})
 
 	ctx := &runtime.HandlerCtx{

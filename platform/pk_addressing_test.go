@@ -33,7 +33,7 @@ func TestGet_addresses_by_real_pk_fields(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 
-			c := New(Config{BaseURL: srv.URL})
+			c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 			if _, err := c.Data().Get(t.Context(), "thing", tc.pk); err != nil {
 				t.Fatalf("Get: %v", err)
 			}
@@ -51,7 +51,7 @@ func TestGet_addresses_by_real_pk_fields(t *testing.T) {
 }
 
 func TestGet_empty_pk_errors(t *testing.T) {
-	c := New(Config{BaseURL: "http://unused.invalid"})
+	c := New(Config{BaseURL: "http://unused.invalid", HTTPClient: &http.Client{Transport: http.DefaultTransport}})
 	if _, err := c.Data().Get(t.Context(), "thing", nil); err == nil {
 		t.Fatal("expected an error for an empty pk map")
 	}
@@ -72,7 +72,7 @@ func TestBulkUpdate_passes_composite_object_id_verbatim(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	if _, err := c.Data().BulkUpdate(t.Context(), "commerce_billing_account",
 		[]string{compositeID}, map[string]any{"name": "Acme"}); err != nil {
 		t.Fatalf("BulkUpdate: %v", err)

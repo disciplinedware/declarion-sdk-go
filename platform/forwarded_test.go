@@ -18,7 +18,7 @@ func TestEveryCallUnderOneRequestCarriesItsOriginatingClient(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(Config{BaseURL: srv.URL, Token: "t"})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client(), Token: "t"})
 	ctx := WithOriginatingClientIP(context.Background(), "203.0.113.7:51514")
 	req, err := c.newRequest(ctx, http.MethodGet, "/api/anything", nil, nil)
 	if err != nil {

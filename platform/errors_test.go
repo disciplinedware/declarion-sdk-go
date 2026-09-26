@@ -51,7 +51,7 @@ func TestAJSONBodyWithNoDeclaredCodeIsUnreadable(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	c := New(Config{BaseURL: srv.URL})
+	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
 	_, err := c.Data().List(t.Context(), "lead", ListParams{})
 	e, ok := errs.From(err)
 	if !ok {

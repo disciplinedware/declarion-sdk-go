@@ -149,11 +149,7 @@ func (t mcpTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := t.platform.applyHeaders(cloned, requestOptions{tenantID: t.platform.tenantID, tenantCode: t.platform.tenantCode}); err != nil {
 		return nil, err
 	}
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	response, err := base.RoundTrip(cloned)
+	response, err := t.base.RoundTrip(cloned)
 	if err != nil || response.StatusCode < 400 {
 		return response, err
 	}
