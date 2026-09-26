@@ -443,7 +443,7 @@ go test ./conformance/ -v
 | Variable | Description | Default |
 |---|---|---|
 | `DECLARION_PLATFORM_URL` | Platform base URL for callbacks | (required) |
-| `DECLARION_PLATFORM_IDLE_CONN_TIMEOUT` | How long a connection to the platform stays pooled unused, as a Go duration; read when `Config.PlatformIdleConnTimeout` is zero. Must stay below the platform's `http_idle_timeout` | `30s` (`platform.DefaultIdleConnTimeout`, half the platform's default) |
+| `DECLARION_PLATFORM_IDLE_CONN_TIMEOUT` | How long a connection to the platform stays pooled unused, as a Go duration; read when `Config.PlatformIdleConnTimeout` is zero. Must stay below the platform's `http_idle_timeout` | `30s` (`platform.DefaultIdleConnTimeout`, half the platform's default). The SDK does not read the platform's setting: a platform whose `http_idle_timeout` is lowered below 30 s needs this set below it too |
 | `DECLARION_JWT_SECRET` | JWT secret for token verification | (empty = no verification) |
 | `DECLARION_SIDECAR_ADDR` | Listen address | `:8080` |
 
