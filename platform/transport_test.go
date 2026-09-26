@@ -68,3 +68,15 @@ func (c *countingTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	c.requests++
 	return c.base.RoundTrip(req)
 }
+
+func TestNewTransportRefusesAReplacedDefaultTransport(t *testing.T) {
+	saved := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = saved })
+	http.DefaultTransport = roundTripperFunc(func(*http.Request) (*http.Response, error) { return nil, nil })
+	_, err := NewTransport(DefaultIdleConnTimeout)
+	require.ErrorContains(t, err, "not an *http.Transport")
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

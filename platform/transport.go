@@ -25,7 +25,11 @@ func NewTransport(idleConnTimeout time.Duration) (*http.Transport, error) {
 	if idleConnTimeout <= 0 {
 		return nil, fmt.Errorf("platform transport: the idle connection timeout must be positive, got %s", idleConnTimeout)
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, fmt.Errorf("platform transport: http.DefaultTransport is a %T, not an *http.Transport; pass Config.HTTPClient with a transport built for the platform", http.DefaultTransport)
+	}
+	transport := base.Clone()
 	transport.IdleConnTimeout = idleConnTimeout
 	return transport, nil
 }
