@@ -358,6 +358,12 @@ return result, errs.New("clickup.rate_limited", errs.Args{"list_id": 4021}).
     Because(err)   // the operator's cause; never serialized
 ```
 
+The sidecar logs the cause at the one place it drops it: a single `request
+failed` line carrying `type`, `error` (the whole chain), `method`, `tenant_id`,
+`user_id` and `audit_op`, at WARN - or ERROR when nothing classified the
+failure. A handler therefore never logs the error it returns; logging it as
+well writes the same failure twice.
+
 There is no way to write a `detail`. RFC 9457's fifth member is a sentence
 nobody declared and nobody translated, and every sentence a person reads on this
 platform is multilingual. A FACT goes in `fields:`, declared and typed, and a

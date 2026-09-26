@@ -8,6 +8,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- **A handler's failure cause reaches the log.** The cause attached with `Because` never travels, and the sidecar used to drop it silently whenever the handler's error was typed - an operator saw only the type. Every failure response now goes through one writer that logs the cause once, as `request failed` with `type`, `error`, `method`, `tenant_id`, `user_id` and `audit_op`, WARN for a typed failure and ERROR for one nothing classified. The separate `handler error`, `invalid request credential`, `invalid verifier token`, `verifier token method mismatch` and `verifier failed` lines are that one line now.
+
 - **`GetParam` documents every parameter type's wire form.** A parameter now takes any field type but `secret` and `password`: an instant, a date, a time, a uuid, a reference key and bytes arrive as their canonical TEXT, a language map as a `map[string]string`, a list of language maps as a `[]map[string]string`. No API change.
 
 ## [v0.22.2] - 2026-09-17

@@ -228,30 +228,31 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError,
-				errs.New("platform.body_too_large", errs.Args{"threshold": MaxRequestSize}).Because(err)))
+			writeError(w, cfg.Logger, "", JSONRPCParseError,
+				errs.New("platform.body_too_large", errs.Args{"threshold": MaxRequestSize}).Because(err))
 			return
 		}
-		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, errs.New("platform.read_body_failed").Because(err)))
+		writeError(w, cfg.Logger, "", JSONRPCParseError, errs.New("platform.read_body_failed").Because(err))
 		return
 	}
 
 	var req Request
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeJSON(w, http.StatusOK, NewErrorResponse("", JSONRPCParseError, errs.New("platform.invalid_body").Because(err)))
+		writeError(w, cfg.Logger, "", JSONRPCParseError, errs.New("platform.invalid_body").Because(err))
 		return
 	}
+	log := cfg.Logger.With(zap.String("method", req.Method))
 
 	// Check protocol version (now req.ID is available for error correlation).
 	protoVer := r.Header.Get("X-Declarion-Protocol-Version")
 	if protoVer != "" && protoVer != ProtocolVersion {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("handler.protocol_mismatch", errs.Args{"expected": ProtocolVersion, "got": protoVer})))
+		writeError(w, log, req.ID, JSONRPCServerError,
+			errs.New("handler.protocol_mismatch", errs.Args{"expected": ProtocolVersion, "got": protoVer}))
 		return
 	}
 
 	if req.JSONRPC != "2.0" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidRequest, errs.New("platform.invalid_body_shape")))
+		writeError(w, log, req.ID, JSONRPCInvalidRequest, errs.New("platform.invalid_body_shape"))
 		return
 	}
 
@@ -266,15 +267,14 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	// verifier token can never reach a handler (registry-miss -> method-not-found).
 	if token != "" {
 		if aud, audErr := tokenAudience(token); audErr == nil && aud == VerifierTokenAudience {
-			handleVerifierDispatch(w, r, cfg, &req, token)
+			handleVerifierDispatch(w, r, cfg, log, &req, token)
 			return
 		}
 	}
 
 	verified, err := cfg.authenticateRequest(r, req.Method)
 	if err != nil {
-		cfg.Logger.Warn("invalid request credential", zap.Error(err), zap.String("method", req.Method))
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError, errs.New("auth.invalid_token")))
+		writeError(w, log, req.ID, JSONRPCServerError, errs.New("auth.invalid_token").Because(err))
 		return
 	}
 
@@ -292,7 +292,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	// fields, not as part of their declared params surface.
 	reserved, paramsWithoutReserved, paramsErr := extractReservedParams(req.Params)
 	if paramsErr != nil {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams, paramsErr))
+		writeError(w, log, req.ID, JSONRPCInvalidParams, paramsErr)
 		return
 	}
 
@@ -300,8 +300,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	hctx := &HandlerCtx{
 		Context:  verified.Context,
 		Platform: platClient,
-		Logger: cfg.Logger.With(
-			zap.String("method", req.Method),
+		Logger: log.With(
 			zap.String("tenant_id", verified.Claims.TenantID),
 			zap.String("user_id", verified.Claims.UserID),
 			zap.String("audit_op", verified.Claims.AuditOpID),
@@ -329,7 +328,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	// Dispatch with params stripped of reserved keys.
 	result, err := executeRegisteredHandler(req.Method, hctx, paramsWithoutReserved)
 	if err != nil {
-		writeHandlerError(w, req.ID, req.Method, err, cfg)
+		writeHandlerError(w, hctx.Logger, req.ID, req.Method, err)
 		return
 	}
 
@@ -340,43 +339,38 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 // audience. Verifier methods ALWAYS require a signed token (no unsigned/test
 // bypass), the token authorizes exactly one method, and the Platform client is
 // built ONLY from an optional run-as credential header - never the call token.
-func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config, req *Request, token string) {
+func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config, log *zap.Logger, req *Request, token string) {
 	if cfg.JWTSecret == "" {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("auth.unauthorized")))
+		writeError(w, log, req.ID, JSONRPCServerError, errs.New("auth.unauthorized"))
 		return
 	}
 	claims, err := parseVerifierToken(token, cfg.JWTSecret)
 	if err != nil {
-		cfg.Logger.Warn("invalid verifier token", zap.Error(err), zap.String("method", req.Method))
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("auth.invalid_token")))
+		writeError(w, log, req.ID, JSONRPCServerError, errs.New("auth.invalid_token").Because(err))
 		return
 	}
 	// Exact-method binding before registry lookup: the token authorizes exactly
 	// one verifier method.
 	if claims.Method != req.Method {
-		cfg.Logger.Warn("verifier token method mismatch", zap.String("claim_method", claims.Method), zap.String("method", req.Method))
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCServerError,
-			errs.New("auth.invalid_token")))
+		writeError(w, log, req.ID, JSONRPCServerError, errs.New("auth.invalid_token").
+			Because(fmt.Errorf("verifier token method mismatch: the token authorizes %q", claims.Method)))
 		return
 	}
 	fn, ok := lookupVerifier(req.Method)
 	if !ok {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCMethodNotFound,
-			errs.New("handler.not_registered", errs.Args{"method": req.Method})))
+		writeError(w, log, req.ID, JSONRPCMethodNotFound,
+			errs.New("handler.not_registered", errs.Args{"method": req.Method}))
 		return
 	}
 	env, err := decodeExternalRequestEnvelope(req.Params)
 	if err != nil {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			errs.New("action.invalid_params").Because(err)))
+		writeError(w, log, req.ID, JSONRPCInvalidParams, errs.New("action.invalid_params").Because(err))
 		return
 	}
 	rawBody, err := base64.StdEncoding.DecodeString(env.RawBodyBase64)
 	if err != nil {
-		writeJSON(w, http.StatusOK, NewErrorResponse(req.ID, JSONRPCInvalidParams,
-			errs.New("action.invalid_params", errs.Args{"param": "raw_body_base64"}).Because(err)))
+		writeError(w, log, req.ID, JSONRPCInvalidParams,
+			errs.New("action.invalid_params", errs.Args{"param": "raw_body_base64"}).Because(err))
 		return
 	}
 
@@ -412,7 +406,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 
 	result, err := fn(vctx)
 	if err != nil {
-		writeVerifierError(w, req.ID, req.Method, err, cfg)
+		writeVerifierError(w, vctx.Logger, req.ID, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, NewResultResponse(req.ID, result))
@@ -423,22 +417,19 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 // verifier bug, a leaked infrastructure error) deliberately renders as
 // unavailable rather than as a rejection: Core must not turn an internal fault
 // into a permanent 401 that makes the provider drop the delivery.
-func writeVerifierError(w http.ResponseWriter, id, method string, err error, cfg *Config) {
+func writeVerifierError(w http.ResponseWriter, log *zap.Logger, id string, err error) {
 	var vErr *VerifierError
 	if errors.As(err, &vErr) {
 		wireErr, rpc := vErr.wire()
 		// The reason is logged HERE and nowhere else: it is internal telemetry
 		// one hop from a public webhook response.
-		cfg.Logger.Info("verifier declined request",
-			zap.String("verifier", method),
+		log.Info("verifier declined request",
 			zap.String("outcome", string(vErr.Outcome)),
 			zap.String("reason", vErr.Reason))
-		writeJSON(w, http.StatusOK, NewErrorResponse(id, rpc, wireErr))
+		writeError(w, log, id, rpc, wireErr)
 		return
 	}
-	cfg.Logger.Error("verifier failed", zap.String("verifier", method), zap.Error(err))
-	writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInternalError,
-		errs.New(CodeVerifierUnavailable).Because(err)))
+	writeError(w, log, id, JSONRPCInternalError, errs.New(CodeVerifierUnavailable).Because(err))
 }
 
 // externalRequestEnvelope is the closed `_external_request` wire envelope Core
@@ -472,6 +463,22 @@ func decodeExternalRequestEnvelope(raw json.RawMessage) (*externalRequestEnvelop
 	return bag.Env, nil
 }
 
+// writeError is the one way this process answers with a failure. The cause
+// attached with Because never crosses the wire, so this is where it is logged:
+// once, beside the type the caller received. A failure with no cause is fully
+// described by what Core receives and logs, and is not logged twice.
+func writeError(w http.ResponseWriter, log *zap.Logger, id string, rpcCode int, e *errs.Error) {
+	if errors.Unwrap(e) != nil {
+		level := zap.WarnLevel
+		if e.Code() == errs.CodeInternalError {
+			// Nothing classified this failure, which makes it a defect.
+			level = zap.ErrorLevel
+		}
+		log.Log(level, "request failed", zap.String("type", e.Code()), zap.Error(e))
+	}
+	writeJSON(w, http.StatusOK, NewErrorResponse(id, rpcCode, e))
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
@@ -491,19 +498,22 @@ func extractBearer(auth string) string {
 // a sidecar needs no catalogue. Everything else takes a declared type here,
 // with the original as the logged cause: an unrecognised Go error's text is not
 // a vetted sentence and does not belong on a wire.
-func writeHandlerError(w http.ResponseWriter, id, method string, err error, cfg *Config) {
+func writeHandlerError(w http.ResponseWriter, log *zap.Logger, id, method string, err error) {
 	if e, ok := errs.From(err); ok {
-		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCCodeFor(e), e))
+		if err != error(e) {
+			// Wrapped on its way out: the wrapping text is operator context, so
+			// the whole chain becomes the cause of a copy the caller never sees.
+			wrapped := *e
+			e = wrapped.Because(err)
+		}
+		writeError(w, log, id, JSONRPCCodeFor(e), e)
 		return
 	}
 	if errors.Is(err, kern.ErrNotFound) {
-		writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCMethodNotFound,
-			errs.New("handler.not_registered", errs.Args{"method": method})))
+		writeError(w, log, id, JSONRPCMethodNotFound, errs.New("handler.not_registered", errs.Args{"method": method}))
 		return
 	}
-	cfg.Logger.Error("handler error", zap.String("method", method), zap.Error(err))
-	writeJSON(w, http.StatusOK, NewErrorResponse(id, JSONRPCInternalError,
-		errs.New(errs.CodeInternalError).Because(err)))
+	writeError(w, log, id, JSONRPCInternalError, errs.New(errs.CodeInternalError).Because(err))
 }
 
 // reservedParams holds the platform-injected metadata carried on JSON-RPC

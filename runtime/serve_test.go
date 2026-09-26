@@ -2,9 +2,8 @@ package runtime
 
 import (
 	"context"
-	"github.com/disciplinedware/declarion-sdk-go/errs"
-
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +17,8 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/disciplinedware/declarion-sdk-go/errs"
 )
 
 const testSecret = "test-secret-key-for-handler-tokens"
@@ -68,11 +69,13 @@ func setupTestServerObservingLogs(t *testing.T) (*httptest.Server, *observer.Obs
 	return startInProcessServer(t, cfg), logs
 }
 
+// loggedReason is the cause the last failure logged: the operator's half of a
+// refusal whose wire half carries only the type.
 func loggedReason(t *testing.T, logs *observer.ObservedLogs) string {
 	t.Helper()
 	entries := logs.All()
 	require.NotEmpty(t, entries, "the operator was told nothing")
-	return entries[len(entries)-1].Message
+	return fmt.Sprint(entries[len(entries)-1].ContextMap()["error"])
 }
 
 func setupTestServerWithConfig(t *testing.T, cfg *Config) *httptest.Server {
