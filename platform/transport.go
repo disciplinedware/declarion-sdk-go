@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// DefaultIdleConnTimeout is half the platform's default `http_idle_timeout`
+// (60 s): what a client keeps an idle connection when its caller declares none.
+const DefaultIdleConnTimeout = 30 * time.Second
+
 // NewTransport returns the connection pool a client keeps to the Declarion
 // platform, closing a pooled connection once it has been idle idleConnTimeout.
 //

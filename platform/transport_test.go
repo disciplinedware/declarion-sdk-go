@@ -25,16 +25,20 @@ func TestNewTransport(t *testing.T) {
 	}
 }
 
-func TestNewRefusesAClientWithoutTransport(t *testing.T) {
+func TestNewBuildsThePlatformTransportWhenGivenNone(t *testing.T) {
 	cases := map[string]*http.Client{
 		"no_client":    nil,
-		"no_transport": {},
+		"no_transport": {Timeout: 7 * time.Second},
 	}
 	for name, client := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.PanicsWithValue(t,
-				"platform.New: Config.HTTPClient with a Transport from platform.NewTransport is required",
-				func() { New(Config{BaseURL: "http://unused.invalid", HTTPClient: client}) })
+			c := New(Config{BaseURL: "http://unused.invalid", HTTPClient: client})
+			transport, ok := c.http.Transport.(*http.Transport)
+			require.True(t, ok)
+			assert.Equal(t, DefaultIdleConnTimeout, transport.IdleConnTimeout)
+			if client != nil {
+				assert.Equal(t, client.Timeout, c.http.Timeout)
+			}
 		})
 	}
 }

@@ -55,8 +55,8 @@ type Config struct {
 	PlatformURL string
 
 	// PlatformIdleConnTimeout closes a connection to the platform once it has
-	// been idle this long. Required: read from DECLARION_PLATFORM_IDLE_CONN_TIMEOUT
-	// (a Go duration) when zero, and refused when neither is set. It must be below
+	// been idle this long: from DECLARION_PLATFORM_IDLE_CONN_TIMEOUT (a Go
+	// duration) when zero, else platform.DefaultIdleConnTimeout. It must be below
 	// the platform's http_idle_timeout - platform.NewTransport says why.
 	PlatformIdleConnTimeout time.Duration
 
@@ -121,13 +121,13 @@ func (c *Config) withDefaults() {
 
 const envPlatformIdleConnTimeout = "DECLARION_PLATFORM_IDLE_CONN_TIMEOUT"
 
-// connectPlatform builds the client every ctx.Platform shares. An unset or
-// unparsable idle timeout is refused, never replaced by a default.
+// connectPlatform builds the client every ctx.Platform shares: the declared idle
+// timeout, else platform.DefaultIdleConnTimeout. An unparsable value is refused.
 func (c *Config) connectPlatform() error {
 	if c.PlatformIdleConnTimeout == 0 {
 		raw := os.Getenv(envPlatformIdleConnTimeout)
 		if raw == "" {
-			return fmt.Errorf("%s is required: set it below the platform's http_idle_timeout, or set Config.PlatformIdleConnTimeout", envPlatformIdleConnTimeout)
+			raw = platform.DefaultIdleConnTimeout.String()
 		}
 		parsed, err := time.ParseDuration(raw)
 		if err != nil {
