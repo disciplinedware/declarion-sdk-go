@@ -73,17 +73,13 @@ type Client struct {
 }
 
 // New creates a platform client with the given config. With no cfg.HTTPClient,
-// or one without a Transport, it builds one from NewTransport at
-// DefaultIdleConnTimeout - never Go's default transport, which keeps an idle
+// or one without a Transport, it uses the process's one default transport
+// (defaultTransport) - never Go's default transport, which keeps an idle
 // connection 90 s, longer than the platform does.
 func New(cfg Config) *Client {
 	httpClient := cfg.HTTPClient
 	if httpClient == nil || httpClient.Transport == nil {
-		transport, err := NewTransport(DefaultIdleConnTimeout)
-		if err != nil {
-			panic(err)
-		}
-		pooled := &http.Client{Transport: transport}
+		pooled := &http.Client{Transport: defaultTransport()}
 		if httpClient != nil {
 			pooled.Timeout = httpClient.Timeout
 		}

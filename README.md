@@ -84,9 +84,11 @@ func main() {
 
 ## Connection to the platform
 
-Every `platform.Client` needs `Config.HTTPClient` with a transport from
-`platform.NewTransport(idleConnTimeout)`; `platform.New` panics without one.
-Share one client across the per-token clients so they share one pool.
+A `platform.Client` sends through `Config.HTTPClient`, whose transport comes from
+`platform.NewTransport(idleConnTimeout)`. Share one client across the per-token
+clients so they share one pool. Without one, `platform.New` uses the process's
+single default transport at `platform.DefaultIdleConnTimeout`, shared by every
+such client.
 
 `idleConnTimeout` is the caller's declared setting and must be shorter than the
 platform's `http_idle_timeout` (60 s by default). The platform closes a

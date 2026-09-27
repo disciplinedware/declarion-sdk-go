@@ -3,6 +3,7 @@ package platform
 import (
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -33,3 +34,18 @@ func NewTransport(idleConnTimeout time.Duration) (*http.Transport, error) {
 	transport.IdleConnTimeout = idleConnTimeout
 	return transport, nil
 }
+
+// defaultTransport is the one pool every client built without Config.HTTPClient
+// shares, so a client made per call does not open a connection per call. A
+// transport that cannot be built fails each request with the reason.
+var defaultTransport = sync.OnceValue(func() http.RoundTripper {
+	transport, err := NewTransport(DefaultIdleConnTimeout)
+	if err != nil {
+		return failingTransport{err: err}
+	}
+	return transport
+})
+
+type failingTransport struct{ err error }
+
+func (t failingTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, t.err }

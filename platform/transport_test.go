@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -41,6 +42,19 @@ func TestNewBuildsThePlatformTransportWhenGivenNone(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A client made per call must not open a pool per call.
+func TestClientsBuiltWithoutAClientShareOneTransport(t *testing.T) {
+	first := New(Config{BaseURL: "http://unused.invalid"})
+	second := New(Config{BaseURL: "http://unused.invalid"})
+	assert.Same(t, first.http.Transport, second.http.Transport)
+}
+
+// A default transport that cannot be built fails the request, not the process.
+func TestAnUnbuildableDefaultTransportFailsTheRequest(t *testing.T) {
+	_, err := failingTransport{err: errors.New("no pool")}.RoundTrip(nil)
+	assert.EqualError(t, err, "no pool")
 }
 
 // The client a caller passes is the one that carries the request.
