@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +29,12 @@ import (
 // call token in the Authorization header; the verifier's Platform client is
 // built ONLY from this header, never from the call token.
 const RunAsTokenHeader = "X-Declarion-Run-As-Token"
+
+// HandlerTimeoutHeader carries the milliseconds the platform will wait for this
+// call, counted when it sent it. The handler's context carries the deadline it
+// makes, so a handler doing bounded rounds can stop starting one it cannot
+// finish; relative, as gRPC's grpc-timeout, so the two clocks need not agree.
+const HandlerTimeoutHeader = "X-Declarion-Timeout-Ms"
 
 const (
 	// ProtocolVersion is the Declarion wire contract version this SDK supports.
@@ -315,6 +322,13 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		return
 	}
 
+	handlerContext, cancel, timeoutErr := withHandlerTimeout(verified.Context, r.Header.Get(HandlerTimeoutHeader))
+	if timeoutErr != nil {
+		writeError(w, log, req.ID, JSONRPCServerError, timeoutErr)
+		return
+	}
+	defer cancel()
+
 	// Build platform client.
 	platClient := platform.New(platform.Config{
 		BaseURL:     cfg.PlatformURL,
@@ -336,7 +350,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 
 	// Build handler context.
 	hctx := &HandlerCtx{
-		Context:  verified.Context,
+		Context:  handlerContext,
 		Platform: platClient,
 		Logger: log.With(
 			zap.String("tenant_id", verified.Claims.TenantID),
@@ -612,4 +626,23 @@ func extractReservedParams(raw json.RawMessage) (reservedParams, json.RawMessage
 		return out, raw, errs.New("platform.internal_error").Because(err)
 	}
 	return out, cleaned, nil
+}
+
+// withHandlerTimeout bounds the handler by what the platform said it will wait.
+// No header leaves the context without a deadline; a header that is not a
+// positive whole number is refused, never read as "no bound".
+func withHandlerTimeout(parent context.Context, header string) (context.Context, context.CancelFunc, *errs.Error) {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return parent, func() {}, nil
+	}
+	ms, err := strconv.ParseInt(header, 10, 64)
+	if err != nil || ms <= 0 {
+		return nil, nil, errs.New("handler.protocol_mismatch", errs.Args{
+			"expected": HandlerTimeoutHeader + ": a positive whole number of milliseconds",
+			"got":      header,
+		})
+	}
+	ctx, cancel := context.WithTimeout(parent, time.Duration(ms)*time.Millisecond)
+	return ctx, cancel, nil
 }

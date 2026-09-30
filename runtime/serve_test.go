@@ -507,3 +507,55 @@ func TestASidecarWithNoCatalogueStillAnswersFully(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 100, limit, "a declared member reaches the platform as a member")
 }
+
+func TestHandleRPC_TheHandlerSeesThePlatformsDeadline(t *testing.T) {
+	cases := []struct {
+		name        string
+		header      string
+		hasDeadline bool
+		refused     bool
+	}{
+		{name: "a_budget_bounds_the_context", header: "45000", hasDeadline: true},
+		{name: "no_header_leaves_no_deadline", header: ""},
+		{name: "a_zero_budget_is_refused", header: "0", refused: true},
+		{name: "a_non_number_is_refused", header: "45s", refused: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ClearHandlerRegistry()
+			var deadline time.Time
+			var ok bool
+			RegisterHandler[echoParams, echoResult]("test.echo", func(ctx *HandlerCtx, p echoParams) (echoResult, error) {
+				deadline, ok = ctx.Context.Deadline()
+				return echoResult{}, nil
+			})
+			srv := setupTestServer(t)
+			defer srv.Close()
+
+			req, err := http.NewRequest("POST", srv.URL+"/rpc", strings.NewReader(`{"jsonrpc":"2.0","id":"req-1","method":"test.echo","params":{}}`))
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer "+mintTestToken(t, "tenant-1", "user-1", "test.echo", "audit-1"))
+			if tc.header != "" {
+				req.Header.Set(HandlerTimeoutHeader, tc.header)
+			}
+			sent := time.Now()
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+			var rpcResp Response
+			respBody, _ := io.ReadAll(resp.Body)
+			require.NoError(t, json.Unmarshal(respBody, &rpcResp))
+
+			if tc.refused {
+				require.NotNil(t, rpcResp.Error)
+				assert.Equal(t, "handler.protocol_mismatch", rpcResp.Error.Data.Code())
+				return
+			}
+			require.Nil(t, rpcResp.Error)
+			assert.Equal(t, tc.hasDeadline, ok)
+			if tc.hasDeadline {
+				assert.WithinDuration(t, sent.Add(45*time.Second), deadline, 5*time.Second)
+			}
+		})
+	}
+}
