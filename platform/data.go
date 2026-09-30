@@ -267,7 +267,7 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 //	  "unique_by": ["email"],                // __upsert only
 //	  "mode": "upsert",                      // __upsert only
 //	  "condition": "entity.status == 'X'",   // __update only (CAS guard)
-//	  "error_if_not_found": false            // __update only
+//	  "on_condition_failed": "skip"          // __update only: refuse (default) | skip
 //	}
 //
 // `object_ids` is the only reserved top-level key. Every other top-level key
@@ -283,26 +283,37 @@ func (d *DataClient) List(ctx context.Context, entity string, params ListParams)
 // updateConfig is the resolved set of __update envelope flags collected from
 // UpdateOption functional options.
 type updateConfig struct {
-	condition       string
-	errorIfNotFound bool
+	condition         string
+	onConditionFailed ConditionFailed
 }
 
 // UpdateOption tunes one BulkUpdate call. Maps onto the __update envelope's
-// optional flags (`condition`, `error_if_not_found`).
+// optional `condition` and `on_condition_failed`.
 type UpdateOption func(*updateConfig)
+
+// ConditionFailed is what a named row outside an update's condition means.
+type ConditionFailed string
+
+const (
+	// ConditionFailedRefuse refuses the whole call with NOT_FOUND and writes
+	// nothing - the platform's default.
+	ConditionFailedRefuse ConditionFailed = "refuse"
+	// ConditionFailedSkip writes the rows the condition holds for and leaves the
+	// others; RowsMatched counts the rows written.
+	ConditionFailedSkip ConditionFailed = "skip"
+)
 
 // WithCondition sets the optional CAS-guard predicate evaluated server-side
 // against each row's pre-update state (expr-lang/expr syntax against
-// `entity`, `event`, `now`). A row whose condition evaluates false is
-// skipped, not failed.
+// `entity`, `event`, `now`). A row whose condition evaluates false refuses
+// the whole call unless WithOnConditionFailed(ConditionFailedSkip) is set.
 func WithCondition(condition string) UpdateOption {
 	return func(c *updateConfig) { c.condition = condition }
 }
 
-// WithErrorIfNotFound makes BulkUpdate fail with NOT_FOUND when zero rows
-// match the PK + condition gate. Default behavior is silent no-op.
-func WithErrorIfNotFound(errorIfNotFound bool) UpdateOption {
-	return func(c *updateConfig) { c.errorIfNotFound = errorIfNotFound }
+// WithOnConditionFailed chooses refuse or skip for a row outside the condition.
+func WithOnConditionFailed(mode ConditionFailed) UpdateOption {
+	return func(c *updateConfig) { c.onConditionFailed = mode }
 }
 
 // upsertConfig is the resolved set of __upsert envelope flags collected from
@@ -468,9 +479,8 @@ func (d *DataClient) BulkUpsert(ctx context.Context, entity string, fields map[s
 // Go map iteration order would be non-deterministic).
 //
 // `condition` (WithCondition) is an optional CAS guard evaluated server-
-// side; rows failing the predicate are skipped, not erred.
-// `error_if_not_found` (WithErrorIfNotFound) flips zero-match from a
-// silent no-op to a NOT_FOUND error.
+// side; a row failing it refuses the call with NOT_FOUND, or is skipped under
+// WithOnConditionFailed(ConditionFailedSkip).
 func (d *DataClient) BulkUpdate(ctx context.Context, entity string, objectIDs []string, fields map[string]any, opts ...UpdateOption) (BulkUpdateResult, error) {
 	if entity == "" {
 		return BulkUpdateResult{}, fmt.Errorf("data update: entity is required")
@@ -494,8 +504,8 @@ func (d *DataClient) BulkUpdate(ctx context.Context, entity string, objectIDs []
 	if cfg.condition != "" {
 		body["condition"] = cfg.condition
 	}
-	if cfg.errorIfNotFound {
-		body["error_if_not_found"] = true
+	if cfg.onConditionFailed != "" {
+		body["on_condition_failed"] = string(cfg.onConditionFailed)
 	}
 	envelope, err := d.dispatchWrite(ctx, path, body)
 	if err != nil {

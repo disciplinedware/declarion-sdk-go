@@ -148,11 +148,11 @@ func (b *Batch) Upsert(entity string, fields map[string]any, uniqueBy []string, 
 // Update adds one __update op for `entity` applying the SAME `fields` patch to
 // every row in `objectIDs`. The op carries object_ids at the TOP LEVEL (the
 // dispatcher's PK channel); params holds only the non-PK body
-// {entity, fields, condition?, error_if_not_found?}.
+// {entity, fields, condition?, on_condition_failed?}.
 //
 // `condition` (optional) is an expr-lang CAS guard evaluated server-side
-// per row. `errorIfNotFound` (optional) flips zero-match from a silent
-// no-op to a NOT_FOUND error that rolls the batch back.
+// per row; a false row refuses the op and rolls the batch back, unless
+// WithOnConditionFailed(ConditionFailedSkip) asks to skip it.
 //
 // For N rows with DIFFERENT field patches, call .Update N times - one op per
 // row, each with a single object_id and its own fields, all in one batch.
@@ -168,8 +168,8 @@ func (b *Batch) Update(entity string, objectIDs []string, fields map[string]any,
 	if cfg.condition != "" {
 		params["condition"] = cfg.condition
 	}
-	if cfg.errorIfNotFound {
-		params["error_if_not_found"] = true
+	if cfg.onConditionFailed != "" {
+		params["on_condition_failed"] = string(cfg.onConditionFailed)
 	}
 	return b.AddOp(BatchOp{
 		Action:    fmt.Sprintf("%s.__update", entity),

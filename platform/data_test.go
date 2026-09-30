@@ -425,7 +425,7 @@ func TestBulkUpsert_rejects_empty_inputs(t *testing.T) {
 
 // TestBulkUpdate_flat_envelope pins:
 //   - POST /api/actions/{entity}.__update
-//   - body = {"object_ids", "entity", "fields", "condition"?, "error_if_not_found"?}
+//   - body = {"object_ids", "entity", "fields", "condition"?, "on_condition_failed"?}
 //   - no `params:` wrapper, no legacy `items[]`
 //   - response envelope {status, result: {rows, rows_matched}, audit_operation_id}
 //     unwrapped to BulkUpdateResult.
@@ -449,7 +449,7 @@ func TestBulkUpdate_flat_envelope(t *testing.T) {
 		[]string{"u1", "u2"},
 		map[string]any{"name": "Alice"},
 		WithCondition("entity.status == 'pending'"),
-		WithErrorIfNotFound(true),
+		WithOnConditionFailed(ConditionFailedSkip),
 	)
 	if err != nil {
 		t.Fatalf("BulkUpdate: %v", err)
@@ -472,8 +472,8 @@ func TestBulkUpdate_flat_envelope(t *testing.T) {
 	if cap.body["condition"] != "entity.status == 'pending'" {
 		t.Errorf("body.condition: got %v", cap.body["condition"])
 	}
-	if cap.body["error_if_not_found"] != true {
-		t.Errorf("body.error_if_not_found: got %v, want true", cap.body["error_if_not_found"])
+	if cap.body["on_condition_failed"] != "skip" {
+		t.Errorf("body.on_condition_failed: got %v, want skip", cap.body["on_condition_failed"])
 	}
 	assertFlatNoLegacy(t, cap.body)
 
@@ -489,10 +489,9 @@ func TestBulkUpdate_flat_envelope(t *testing.T) {
 }
 
 // TestBulkUpdate_omits_optional_fields proves zero-value options do not
-// emit `condition: ""` or `error_if_not_found: false` on the wire.
+// emit `condition: ""` or `on_condition_failed: ""` on the wire.
 // `condition: ""` would override a YAML-level default to empty server-side;
-// `error_if_not_found: false` is the platform default and adding it just
-// noises the wire.
+// an empty on_condition_failed is not a value the platform accepts.
 func TestBulkUpdate_omits_optional_fields(t *testing.T) {
 	srv, cap := newCaptureServer(t, `{"status":"success","result":{"rows":[],"rows_matched":0}}`)
 	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
@@ -505,8 +504,8 @@ func TestBulkUpdate_omits_optional_fields(t *testing.T) {
 	if _, ok := cap.body["condition"]; ok {
 		t.Errorf("condition must be absent: got %+v", cap.body)
 	}
-	if _, ok := cap.body["error_if_not_found"]; ok {
-		t.Errorf("error_if_not_found must be absent when false: got %+v", cap.body)
+	if _, ok := cap.body["on_condition_failed"]; ok {
+		t.Errorf("on_condition_failed must be absent when unset: got %+v", cap.body)
 	}
 }
 

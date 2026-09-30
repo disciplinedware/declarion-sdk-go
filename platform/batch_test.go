@@ -20,7 +20,7 @@ func TestBatch_typed_helpers_build_flat_envelopes(t *testing.T) {
 		Upsert("lead", map[string]any{"email": "a@x"}, []string{"email"}, "insert_if_missing").
 		Update("lead", []string{"u1"}, map[string]any{"name": "Bob"},
 			WithCondition("entity.status == 'pending'"),
-			WithErrorIfNotFound(true),
+			WithOnConditionFailed(ConditionFailedSkip),
 		).
 		Delete("lead", []string{"u1", "u2"}).
 		Restore("lead", []string{"u3"})
@@ -58,7 +58,7 @@ func TestBatch_typed_helpers_build_flat_envelopes(t *testing.T) {
 	assertOpFlat(t, b.ops[1])
 
 	// Op 2: __update — object_ids at the op TOP LEVEL; params = entity + fields
-	// + condition + error_if_not_found (NO object_ids in params).
+	// + condition + on_condition_failed (NO object_ids in params).
 	if b.ops[2].Action != "lead.__update" {
 		t.Errorf("ops[2].action: got %q", b.ops[2].Action)
 	}
@@ -68,8 +68,8 @@ func TestBatch_typed_helpers_build_flat_envelopes(t *testing.T) {
 	if b.ops[2].Params["condition"] != "entity.status == 'pending'" {
 		t.Errorf("ops[2].condition: got %v", b.ops[2].Params["condition"])
 	}
-	if b.ops[2].Params["error_if_not_found"] != true {
-		t.Errorf("ops[2].error_if_not_found: got %v", b.ops[2].Params["error_if_not_found"])
+	if b.ops[2].Params["on_condition_failed"] != "skip" {
+		t.Errorf("ops[2].on_condition_failed: got %v", b.ops[2].Params["on_condition_failed"])
 	}
 	assertOpFlat(t, b.ops[2])
 
@@ -112,7 +112,7 @@ func assertOpFlat(t *testing.T, op BatchOp) {
 }
 
 // TestBatch_Update_omits_optional_fields proves zero-value UpdateOptions
-// do not emit `condition: ""` / `error_if_not_found: false` on the wire, and
+// do not emit `condition: ""` / `on_condition_failed: ""` on the wire, and
 // that object_ids sits at the op top level (never in params).
 func TestBatch_Update_omits_optional_fields(t *testing.T) {
 	b := (&Client{}).NewBatch().Update("lead", []string{"u1"}, map[string]any{"name": "x"})
@@ -128,8 +128,8 @@ func TestBatch_Update_omits_optional_fields(t *testing.T) {
 	if _, ok := b.ops[0].Params["condition"]; ok {
 		t.Errorf("condition must be absent when not set: %+v", b.ops[0].Params)
 	}
-	if _, ok := b.ops[0].Params["error_if_not_found"]; ok {
-		t.Errorf("error_if_not_found must be absent when false: %+v", b.ops[0].Params)
+	if _, ok := b.ops[0].Params["on_condition_failed"]; ok {
+		t.Errorf("on_condition_failed must be absent when unset: %+v", b.ops[0].Params)
 	}
 }
 
