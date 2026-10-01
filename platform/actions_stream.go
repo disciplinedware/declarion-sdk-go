@@ -175,6 +175,7 @@ func (a *ActionsClient) InvokeStreaming(ctx context.Context, code string, params
 		cancel()
 		return nil, errorFromTransport(path, err)
 	}
+	processParams.observe(a.c.baseURL, resp.Header)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Pre-start failure: the stream never committed, so this is an ordinary

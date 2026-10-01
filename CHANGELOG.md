@@ -8,6 +8,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- **`ParamsClient.Lookup` (and `GetParam`) answers from a process-wide cache while the platform allows it.** A read is reused for the `X-Declarion-Params-Max-Age-Ms` it carried, and only while every response from the same platform carries the `X-Declarion-Params-Version` it was read at; a newer version on any response ends the reuse. The key is the platform, the token, the target tenant and the code. A platform that sends no max age gets no caching. Needs the declarion-core that sends both headers.
+
 - **BREAKING: `WithErrorIfNotFound` is removed; `WithOnConditionFailed(ConditionFailedRefuse | ConditionFailedSkip)` replaces it.** The flag never changed anything: declarion-core refuses a false `condition` with NOT_FOUND whatever it said, and now drops the param. `ConditionFailedSkip` writes the rows the condition holds for and leaves the others (`RowsMatched` counts the rows written); without the option a false row refuses the call. `WithCondition`'s doc no longer claims a skip.
 
 - **A handler's context carries the platform's deadline.** The sidecar reads `X-Declarion-Timeout-Ms` - the milliseconds the platform waits for this call, sent by declarion-core - and bounds `HandlerCtx.Context` by it, so `ctx.Context.Deadline()` answers when the dispatch will give up. No header leaves the context without a deadline; a value that is not a positive whole number is refused as `handler.protocol_mismatch`. `runtime.HandlerTimeoutHeader` names the header.

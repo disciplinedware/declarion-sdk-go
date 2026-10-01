@@ -238,17 +238,34 @@ func (c *Client) applyHeaders(req *http.Request, ro requestOptions) error {
 // not read, take the client's OWN transport types - so a caller can ask
 // errors.Is(err, errs.ErrRetryable) about a dial failure and be told yes.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) ([]byte, int, string, error) {
+	r, err := c.exchange(ctx, method, path, query, body, opts...)
+	return r.body, r.status, r.contentType, err
+}
+
+// response is one buffered platform response; header is nil when no response
+// arrived.
+type response struct {
+	body        []byte
+	status      int
+	contentType string
+	header      http.Header
+}
+
+// exchange is do with the response headers kept, and the one place a buffered
+// response passes through, so every one of them reports its parameter version.
+func (c *Client) exchange(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) (response, error) {
 	req, err := c.newRequest(ctx, method, path, query, body, opts...)
 	if err != nil {
-		return nil, 0, "", err
+		return response{}, err
 	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, 0, "", errorFromTransport(path, err)
+		return response{}, errorFromTransport(path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	contentType := resp.Header.Get("Content-Type")
+	processParams.observe(c.baseURL, resp.Header)
+	r := response{status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), header: resp.Header}
 
 	// MaxBytesReader surfaces *http.MaxBytesError on overflow so callers see
 	// "response exceeded N bytes" instead of a silently-truncated body that
@@ -257,11 +274,11 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			return nil, resp.StatusCode, contentType, errorFromUnreadable(resp.StatusCode, path,
+			return r, errorFromUnreadable(resp.StatusCode, path,
 				fmt.Errorf("response exceeded %d bytes (limit %d)", maxErr.Limit, MaxResponseSize))
 		}
-		return nil, resp.StatusCode, contentType, errorFromUnreadable(resp.StatusCode, path, err)
+		return r, errorFromUnreadable(resp.StatusCode, path, err)
 	}
-
-	return respBody, resp.StatusCode, contentType, nil
+	r.body = respBody
+	return r, nil
 }

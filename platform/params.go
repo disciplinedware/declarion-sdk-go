@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // ParamsClient wraps /api/params/{code} endpoints.
@@ -18,11 +19,11 @@ type ParamsClient struct {
 // caller's default. The default never crosses the wire.
 type paramLookupResponse struct {
 	Data struct {
-		Code   string `json:"code"`
-		Found  bool   `json:"found"`
-		Value  any    `json:"value,omitempty"`
-		Source string `json:"source,omitempty"`
-		Type   string `json:"type,omitempty"`
+		Code   string          `json:"code"`
+		Found  bool            `json:"found"`
+		Value  json.RawMessage `json:"value,omitempty"`
+		Source string          `json:"source,omitempty"`
+		Type   string          `json:"type,omitempty"`
 	} `json:"data"`
 }
 
@@ -30,20 +31,33 @@ type paramLookupResponse struct {
 // for it. found=false means the SDK caller should use its default;
 // found=true means the value is authoritative (even if it is nil/zero).
 // Transport errors propagate; "not found" is never an error.
+//
+// An answer is reused, with no request, while the platform allows it: for the
+// max age the read carried, and only until any response from the same platform
+// carries a newer parameter version (params_cache.go).
 func (p *ParamsClient) Lookup(ctx context.Context, code string) (value any, found bool, source string, err error) {
+	key := paramsKey{baseURL: p.c.baseURL, token: p.c.token, tenantID: p.c.tenantID, tenantCode: p.c.tenantCode, code: code}
+	if entry, ok := processParams.get(key, time.Now()); ok {
+		value, err := entry.decode()
+		return value, entry.found, entry.source, err
+	}
+
 	path := fmt.Sprintf("/api/params/%s", code)
-	body, status, contentType, ferr := p.c.do(ctx, "GET", path, nil, nil)
+	r, ferr := p.c.exchange(ctx, "GET", path, nil, nil)
 	if ferr != nil {
 		return nil, false, "", ferr
 	}
-	if status < 200 || status >= 300 {
-		return nil, false, "", errorFromResponse(status, body, path, contentType)
+	if r.status < 200 || r.status >= 300 {
+		return nil, false, "", errorFromResponse(r.status, r.body, path, r.contentType)
 	}
 	var result paramLookupResponse
-	if jerr := json.Unmarshal(body, &result); jerr != nil {
+	if jerr := json.Unmarshal(r.body, &result); jerr != nil {
 		return nil, false, "", fmt.Errorf("unmarshal param response: %w", jerr)
 	}
-	return result.Data.Value, result.Data.Found, result.Data.Source, nil
+	entry := paramsEntry{value: result.Data.Value, found: result.Data.Found, source: result.Data.Source}
+	processParams.put(key, r.header, entry, time.Now())
+	value, err = entry.decode()
+	return value, entry.found, entry.source, err
 }
 
 // GetParam retrieves a platform parameter and coerces it to T.
