@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.23.0] - 2026-10-02
+
 ### Changed
 
 - **`ParamsClient.Lookup` (and `GetParam`) answers from a process-wide cache while the platform allows it.** A read is reused for the `X-Declarion-Params-Max-Age-Ms` it carried, and only while every response from the same platform carries the `X-Declarion-Params-Version` it was read at; a newer version on any response ends the reuse. The key is the platform, the token, the target tenant and the code. A platform that sends no max age gets no caching. Needs the declarion-core that sends both headers.
