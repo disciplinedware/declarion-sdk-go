@@ -2,6 +2,35 @@
 
 Go SDK for building [Declarion](https://declarion.io) handler sidecars. Handles JSON-RPC 2.0 envelope parsing, continuation token verification, W3C trace propagation, platform API callbacks, and graceful shutdown. You write typed handler functions; the SDK handles the wire.
 
+## Handler authority
+
+`runtime.HandlerCtx` and `platform.Client` expose immutable `WithGrants(...string)`
+and `WithSystemRole()` derivation. Originals and siblings stay usable; further
+derivation accumulates the selected grants and System choice. Derived clients
+share the HTTP transport, token, tenant target and trace metadata.
+
+```go
+selected, err := ctx.WithGrants("entity:invoice:write")
+if err != nil {
+    return nil, err
+}
+result, err := selected.Platform.Actions().Invoke(selected.Context, "invoice.approve", platform.InvokeParams{})
+```
+
+Core validates grant syntax, targets and scopes. A selection changes effective
+grants, never the original actor, tenant, roles or ownership. System adds `*`
+and trusted storage exemptions while keeping tenant and business conditions.
+Ordinary credentials cannot authenticate elevation; only authenticated handler
+execution continuations can. `runtime.MintHandlerToken` supplies depth zero for
+a root and rejects negative depth or elevation on RunAs/Anonymous credentials.
+
+Current continuations require signed `invoke_depth`, retain the original
+snapshot plus cumulative `elevation` and original audit `caller_context`, and
+cap child expiry at the parent. `X-Declarion-Elevation` carries the branch's total
+selection as unpadded base64url JSON. An absent header inherits the signed
+selection. Core refuses subtraction and malformed selections before work.
+Core and sidecars must use the current contract together.
+
 ## Install
 
 ```bash

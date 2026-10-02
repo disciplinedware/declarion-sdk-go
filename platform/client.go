@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/disciplinedware/declarion-sdk-go/execution"
 )
 
 // MaxResponseSize caps platform API response bodies this client will read
@@ -63,13 +65,16 @@ type Config struct {
 // Client provides typed access to Declarion platform APIs.
 // Auto-attaches the continuation token and trace headers on every request.
 type Client struct {
-	baseURL     string
-	token       string
-	traceparent string
-	baggage     string
-	tenantID    string
-	tenantCode  string
-	http        *http.Client
+	elevation    execution.Elevation
+	selectionErr error
+	selected     bool
+	baseURL      string
+	token        string
+	traceparent  string
+	baggage      string
+	tenantID     string
+	tenantCode   string
+	http         *http.Client
 }
 
 // New creates a platform client with the given config. With no cfg.HTTPClient,
@@ -77,6 +82,7 @@ type Client struct {
 // (defaultTransport) - never Go's default transport, which keeps an idle
 // connection 90 s, longer than the platform does.
 func New(cfg Config) *Client {
+	elevation, selectionErr := execution.InheritedSelection(cfg.Token)
 	httpClient := cfg.HTTPClient
 	if httpClient == nil || httpClient.Transport == nil {
 		pooled := &http.Client{Transport: defaultTransport()}
@@ -86,13 +92,15 @@ func New(cfg Config) *Client {
 		httpClient = pooled
 	}
 	return &Client{
-		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),
-		token:       cfg.Token,
-		traceparent: cfg.Traceparent,
-		baggage:     cfg.Baggage,
-		tenantID:    cfg.TargetTenantID,
-		tenantCode:  cfg.TargetTenantCode,
-		http:        httpClient,
+		elevation:    elevation,
+		selectionErr: selectionErr,
+		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
+		token:        cfg.Token,
+		traceparent:  cfg.Traceparent,
+		baggage:      cfg.Baggage,
+		tenantID:     cfg.TargetTenantID,
+		tenantCode:   cfg.TargetTenantCode,
+		http:         httpClient,
 	}
 }
 
@@ -205,6 +213,16 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 }
 
 func (c *Client) applyHeaders(req *http.Request, ro requestOptions) error {
+	if c.selectionErr != nil {
+		return c.selectionErr
+	}
+	if c.selected {
+		header, err := execution.Encode(c.elevation)
+		if err != nil {
+			return err
+		}
+		req.Header.Set(execution.ElevationHeader, header)
+	}
 	if ro.tenantID != "" && ro.tenantCode != "" {
 		return fmt.Errorf("platform client: target tenant id and code are mutually exclusive")
 	}

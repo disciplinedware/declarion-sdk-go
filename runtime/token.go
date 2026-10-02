@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/disciplinedware/declarion-sdk-go/execution"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -37,6 +38,11 @@ const (
 // declarion-core/golang/internal/auth/handler_token.go).
 // Exported so the conformance harness and tests can use the same type.
 type HandlerClaims struct {
+	Kind          string                  `json:"kind,omitempty"`
+	RunAs         bool                    `json:"run_as,omitempty"`
+	Elevation     execution.Elevation     `json:"elevation,omitempty"`
+	InvokeDepth   *int                    `json:"invoke_depth"`
+	CallerContext execution.CallerContext `json:"caller_context,omitempty"`
 	jwt.RegisteredClaims
 	UserID     string   `json:"uid"`
 	TenantID   string   `json:"tid"`
@@ -120,6 +126,12 @@ func parseHandlerToken(tokenString string, jwtSecret string) (*HandlerClaims, er
 	if claims.Scope != HandlerTokenScope {
 		return nil, fmt.Errorf("invalid handler token scope: %s", claims.Scope)
 	}
+	if !claims.Anonymous && !claims.RunAs && (claims.InvokeDepth == nil || *claims.InvokeDepth < 0) {
+		return nil, fmt.Errorf("handler token requires nonnegative invoke_depth")
+	}
+	if (claims.Anonymous || claims.RunAs) && !claims.Elevation.Empty() {
+		return nil, fmt.Errorf("elevation requires authenticated handler execution")
+	}
 	// Identity-claim guards mirror declarion-core's HandlerTokenManager
 	// (handler_token.go::Validate). A token whose payload is missing
 	// UserID / TenantID / Action is malformed regardless of signature;
@@ -147,6 +159,12 @@ func parseHandlerToken(tokenString string, jwtSecret string) (*HandlerClaims, er
 // least-privilege tokens - only the permissions the call needs - and never assert
 // authority it should not have.
 type HandlerTokenParams struct {
+	Kind            string
+	RunAs           bool
+	Elevation       execution.Elevation
+	InvokeDepth     int
+	CallerContext   execution.CallerContext
+	ParentExpiresAt time.Time
 	// UserID is the acting principal (sub + uid). Required unless Anonymous.
 	// It need not reference a provisioned user row, but must be a valid UUID
 	// wherever the target action persists it.
@@ -189,6 +207,12 @@ type HandlerTokenParams struct {
 // symmetric - the same secret validates and signs). Mint only least-privilege
 // tokens, for a verified or explicitly-trusted subject, with a short TTL.
 func MintHandlerToken(jwtSecret string, p HandlerTokenParams) (string, error) {
+	if p.InvokeDepth < 0 {
+		return "", fmt.Errorf("negative invoke_depth")
+	}
+	if (p.Anonymous || p.RunAs) && !p.Elevation.Empty() {
+		return "", fmt.Errorf("elevation requires authenticated handler execution")
+	}
 	if jwtSecret == "" {
 		return "", fmt.Errorf("mint handler token: empty jwt secret")
 	}
@@ -205,13 +229,22 @@ func MintHandlerToken(jwtSecret string, p HandlerTokenParams) (string, error) {
 		return "", fmt.Errorf("mint handler token: TTL must be positive")
 	}
 	now := time.Now()
+	expiresAt := now.Add(p.TTL + HandlerTokenGrace)
+	if !p.ParentExpiresAt.IsZero() && p.ParentExpiresAt.Before(expiresAt) {
+		expiresAt = p.ParentExpiresAt
+	}
 	claims := &HandlerClaims{
+		Kind:          p.Kind,
+		RunAs:         p.RunAs,
+		Elevation:     execution.Normalize(p.Elevation),
+		InvokeDepth:   &p.InvokeDepth,
+		CallerContext: p.CallerContext,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    HandlerTokenIssuer,
 			Subject:   p.UserID,
 			Audience:  jwt.ClaimStrings{HandlerTokenAudience},
 			IssuedAt:  jwt.NewNumericDate(now),
-			ExpiresAt: jwt.NewNumericDate(now.Add(p.TTL + HandlerTokenGrace)),
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			ID:        uuid.NewString(),
 		},
 		UserID:         p.UserID,

@@ -5,12 +5,18 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/disciplinedware/declarion-sdk-go/execution"
 	"github.com/disciplinedware/declarion-sdk-go/platform"
 )
 
 // HandlerCtx is the handler execution context. Provides access to the platform
 // client, logger, identity claims, and invocation metadata.
 type HandlerCtx struct {
+	claims        *HandlerClaims
+	Kind          string
+	IsSystem      bool
+	InvokeDepth   int
+	CallerContext execution.CallerContext
 	// Context is the underlying Go context with cancellation/deadline.
 	Context context.Context
 

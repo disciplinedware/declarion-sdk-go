@@ -29,6 +29,7 @@ func TestParseHandlerToken_wrong_secret(t *testing.T) {
 
 func TestParseHandlerToken_expired(t *testing.T) {
 	claims := &HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Subject:   "u1",
@@ -53,6 +54,7 @@ func TestParseHandlerToken_expired(t *testing.T) {
 
 func TestParseHandlerToken_wrong_audience(t *testing.T) {
 	claims := &HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Subject:   "u1",
@@ -75,6 +77,7 @@ func TestParseHandlerToken_wrong_audience(t *testing.T) {
 
 func TestParseHandlerToken_wrong_scope(t *testing.T) {
 	claims := &HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Subject:   "u1",

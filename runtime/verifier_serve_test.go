@@ -40,6 +40,7 @@ func mintVerifierToken(t *testing.T, method, action string) string {
 func mintTestTokenWithMethod(t *testing.T, method string) string {
 	t.Helper()
 	claims := &HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Audience:  jwt.ClaimStrings{HandlerTokenAudience},

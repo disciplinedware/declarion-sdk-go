@@ -338,6 +338,7 @@ func (e *PlatformEnv) SetParam(t *testing.T, ctx *runtime.HandlerCtx, code strin
 func (e *PlatformEnv) mintToken(tenantID, tenantCode, userID string, isGlobalUser bool) string {
 	now := time.Now()
 	claims := &runtime.HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Subject:   userID,

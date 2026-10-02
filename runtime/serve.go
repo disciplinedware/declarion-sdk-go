@@ -350,8 +350,11 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 
 	// Build handler context.
 	hctx := &HandlerCtx{
-		Context:  handlerContext,
-		Platform: platClient,
+		claims:        &verified.Claims,
+		Kind:          verified.Claims.Kind,
+		CallerContext: verified.Claims.CallerContext,
+		Context:       handlerContext,
+		Platform:      platClient,
 		Logger: log.With(
 			zap.String("tenant_id", verified.Claims.TenantID),
 			zap.String("user_id", verified.Claims.UserID),
@@ -376,6 +379,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		Locale:         reserved.Locale,
 		Baggage:        baggage,
 	}
+	hctx.projectAuthority()
 
 	// Dispatch with params stripped of reserved keys.
 	result, err := executeRegisteredHandler(req.Method, hctx, paramsWithoutReserved)

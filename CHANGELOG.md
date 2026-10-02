@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Changed
+
+- **Handlers select additional grants or System on independent contexts.** `runtime.HandlerCtx` and `platform.Client` provide `WithGrants` and `WithSystemRole`; derived clients preserve pooled transport and caller metadata. Signed continuations carry original authority, cumulative selection and bounded depth/expiry. Core and sidecars must update together.
+
 ## [v0.23.0] - 2026-10-02
 
 ### Changed

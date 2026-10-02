@@ -26,6 +26,7 @@ const testSecret = "test-secret-key-for-handler-tokens"
 func mintTestToken(t *testing.T, tenantID, userID, action, auditOp string) string {
 	t.Helper()
 	claims := &HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Subject:   userID,
@@ -117,6 +118,7 @@ func (a *testRequestAuthenticator) Authenticate(r *http.Request, method string) 
 	return &AuthenticatedRequest{
 		Context: context.WithValue(r.Context(), testAuthenticatorContextKey{}, "verified"),
 		Claims: HandlerClaims{
+			InvokeDepth:    new(int),
 			TenantID:       "tenant-from-verifier",
 			UserID:         "user-from-verifier",
 			AgentID:        "agent-from-verifier",

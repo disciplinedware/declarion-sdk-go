@@ -185,6 +185,7 @@ func (h *Harness) record(name string, err error) {
 
 func (h *Harness) mintToken(tenantID, userID, action, auditOp string) string {
 	claims := &runtime.HandlerClaims{
+		InvokeDepth: new(int),
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    "declarion",
 			Subject:   userID,
