@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/disciplinedware/declarion-sdk-go/execution"
+	"github.com/disciplinedware/declarion-sdk-go/tracing"
 )
 
 // MaxResponseSize caps platform API response bodies this client will read
@@ -39,12 +40,6 @@ type Config struct {
 	// Token is the continuation token forwarded on every callback.
 	Token string
 
-	// Traceparent is the W3C traceparent header propagated on every callback.
-	Traceparent string
-
-	// Baggage is the W3C baggage header propagated on every callback.
-	Baggage string
-
 	// TargetTenantID sends X-Declarion-Tenant-ID on every request. Mutually
 	// exclusive with TargetTenantCode.
 	TargetTenantID string
@@ -70,8 +65,6 @@ type Client struct {
 	selected     bool
 	baseURL      string
 	token        string
-	traceparent  string
-	baggage      string
 	tenantID     string
 	tenantCode   string
 	http         *http.Client
@@ -91,13 +84,12 @@ func New(cfg Config) *Client {
 		}
 		httpClient = pooled
 	}
+	httpClient = tracing.HTTPClient(httpClient, cfg.BaseURL)
 	return &Client{
 		elevation:    elevation,
 		selectionErr: selectionErr,
 		baseURL:      strings.TrimRight(cfg.BaseURL, "/"),
 		token:        cfg.Token,
-		traceparent:  cfg.Traceparent,
-		baggage:      cfg.Baggage,
 		tenantID:     cfg.TargetTenantID,
 		tenantCode:   cfg.TargetTenantCode,
 		http:         httpClient,
@@ -140,12 +132,6 @@ func targetTenantOptions(tenantID, tenantCode string) []RequestOption {
 
 // Token returns the continuation token this client uses.
 func (c *Client) Token() string { return c.token }
-
-// Traceparent returns the W3C traceparent header this client propagates.
-func (c *Client) Traceparent() string { return c.traceparent }
-
-// Baggage returns the W3C baggage header this client propagates.
-func (c *Client) Baggage() string { return c.baggage }
 
 // Data returns the data API sub-client.
 func (c *Client) Data() *DataClient {
@@ -229,12 +215,6 @@ func (c *Client) applyHeaders(req *http.Request, ro requestOptions) error {
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if c.traceparent != "" {
-		req.Header.Set("traceparent", c.traceparent)
-	}
-	if c.baggage != "" {
-		req.Header.Set("baggage", c.baggage)
 	}
 	if ro.tenantID != "" {
 		req.Header.Set(TargetTenantIDHeader, ro.tenantID)

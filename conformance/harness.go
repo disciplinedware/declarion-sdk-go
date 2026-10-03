@@ -354,7 +354,7 @@ func (h *Harness) testHeaderPropagation() {
 	// Check that the callback was received and traceparent was forwarded.
 	found := false
 	for _, cb := range h.CallbackRecords {
-		if cb.Traceparent == traceparent {
+		if len(cb.Traceparent) == 55 && cb.Traceparent[3:35] == traceparent[3:35] {
 			found = true
 			break
 		}
@@ -402,7 +402,7 @@ func (h *Harness) testTokenForwarding() {
 // testBaggagePropagation: send baggage, verify the sidecar's callback includes it.
 func (h *Harness) testBaggagePropagation() {
 	token := h.mintToken("t1", "u1", "conformance.callback", "op5")
-	baggage := "declarion.tenant_id=t1,declarion.user_id=u1,declarion.audit_operation_id=op5"
+	baggage := "declarion.trace_path=handler,irrelevant=private"
 	params := map[string]any{"callback_url": h.fakeAPI.URL + "/api/data/test"}
 	h.CallbackRecords = nil
 	resp, _, err := h.callSidecarWithBaggage("conformance.callback", params, token, "", baggage, runtime.ProtocolVersion)
@@ -417,7 +417,7 @@ func (h *Harness) testBaggagePropagation() {
 
 	found := false
 	for _, cb := range h.CallbackRecords {
-		if cb.Baggage == baggage {
+		if cb.Baggage == "declarion.trace_path=handler->conformance.callback" {
 			found = true
 			break
 		}

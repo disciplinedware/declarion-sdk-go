@@ -380,7 +380,6 @@ func TestHandleRPC_context_propagation(t *testing.T) {
 	assert.Equal(t, "test.ctx", capturedCtx.Action)
 	assert.Equal(t, "lead", capturedCtx.EntityCode)
 	assert.Equal(t, []string{"lead-1", "lead-2"}, capturedCtx.ObjectIDs)
-	assert.Equal(t, "declarion.tenant_id=tenant-42", capturedCtx.Baggage)
 	assert.NotNil(t, capturedCtx.Platform)
 	assert.NotNil(t, capturedCtx.Logger)
 }

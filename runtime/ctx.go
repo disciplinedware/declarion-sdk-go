@@ -66,9 +66,6 @@ type HandlerCtx struct {
 	// again and reaching a different answer.
 	Locale string
 
-	// Baggage is the W3C baggage header value propagated from the platform.
-	Baggage string
-
 	// RawBody carries the exact bytes of the HTTP request body, captured
 	// before JSON unmarshalling, when the handler was registered with raw-body
 	// support. Empty for handlers that did not opt in.

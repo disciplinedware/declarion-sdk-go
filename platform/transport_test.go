@@ -34,7 +34,7 @@ func TestNewBuildsThePlatformTransportWhenGivenNone(t *testing.T) {
 	for name, client := range cases {
 		t.Run(name, func(t *testing.T) {
 			c := New(Config{BaseURL: "http://unused.invalid", HTTPClient: client})
-			transport, ok := c.http.Transport.(*http.Transport)
+			transport, ok := c.http.Transport.(interface{ Unwrap() http.RoundTripper }).Unwrap().(*http.Transport)
 			require.True(t, ok)
 			assert.Equal(t, DefaultIdleConnTimeout, transport.IdleConnTimeout)
 			if client != nil {
@@ -48,7 +48,9 @@ func TestNewBuildsThePlatformTransportWhenGivenNone(t *testing.T) {
 func TestClientsBuiltWithoutAClientShareOneTransport(t *testing.T) {
 	first := New(Config{BaseURL: "http://unused.invalid"})
 	second := New(Config{BaseURL: "http://unused.invalid"})
-	assert.Same(t, first.http.Transport, second.http.Transport)
+	firstBase := first.http.Transport.(interface{ Unwrap() http.RoundTripper }).Unwrap()
+	secondBase := second.http.Transport.(interface{ Unwrap() http.RoundTripper }).Unwrap()
+	assert.Same(t, firstBase, secondBase)
 }
 
 // A default transport that cannot be built fails the request, not the process.

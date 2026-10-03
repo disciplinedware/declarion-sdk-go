@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"github.com/disciplinedware/declarion-sdk-go/tracing"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -44,23 +45,23 @@ func TestMCPClientUsesPlatformAuthorizationForCatalogAndCall(t *testing.T) {
 	client := New(Config{
 		BaseURL:        httpServer.URL,
 		Token:          "turn-bearer",
-		Traceparent:    "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
 		TargetTenantID: "tenant-1",
 		HTTPClient:     httpServer.Client(),
 	})
-	session, err := client.MCP().Connect(context.Background())
+	ctx := tracing.Restore(t.Context(), "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01", "")
+	session, err := client.MCP().Connect(ctx)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	defer func() { _ = session.Close() }()
-	tools, err := session.ListTools(context.Background())
+	tools, err := session.ListTools(ctx)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
 	if len(tools) != 1 || tools[0].Name != "orders.place" || string(tools[0].InputSchema) != `{"type":"object"}` {
 		t.Fatalf("tools = %#v", tools)
 	}
-	result, err := session.CallTool(context.Background(), "orders.place", map[string]any{"symbol": "SPY"})
+	result, err := session.CallTool(ctx, "orders.place", map[string]any{"symbol": "SPY"})
 	if err != nil {
 		t.Fatalf("call tool: %v", err)
 	}

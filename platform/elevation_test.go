@@ -16,7 +16,7 @@ func TestClientSelectionPreservesTransportAndSiblings(t *testing.T) {
 	transport, err := NewTransport(time.Second)
 	require.NoError(t, err)
 	httpClient := &http.Client{Transport: transport}
-	base := New(Config{BaseURL: "http://example.com", Token: "e30." + payload + ".signature", Traceparent: "trace", Baggage: "baggage", TargetTenantID: "tenant", HTTPClient: httpClient})
+	base := New(Config{BaseURL: "http://example.com", Token: "e30." + payload + ".signature", TargetTenantID: "tenant", HTTPClient: httpClient})
 	a, err := base.WithGrants("a")
 	require.NoError(t, err)
 	b, err := base.WithGrants("b")
@@ -38,9 +38,9 @@ func TestClientSelectionPreservesTransportAndSiblings(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.grants, selected.Grants)
 		require.Equal(t, tc.system, selected.System)
-		require.Same(t, httpClient, tc.client.http)
+		require.Same(t, base.http, tc.client.http)
 		require.Equal(t, "tenant", request.Header.Get(TargetTenantIDHeader))
-		require.Equal(t, "trace", request.Header.Get("traceparent"))
+		require.Empty(t, request.Header.Get("traceparent"))
 	}
 	require.Equal(t, []string{"original"}, base.Elevation().Grants)
 	request, err := base.newRequest(t.Context(), "GET", "/api/data/record", nil, nil)
@@ -57,7 +57,7 @@ func TestClientSelectionStreamingRequest(t *testing.T) {
 		require.NoError(t, err)
 	}))
 	t.Cleanup(server.Close)
-	client := New(Config{BaseURL: server.URL, Token: "dk:credential", TargetTenantID: "tenant", Traceparent: "trace", HTTPClient: server.Client()})
+	client := New(Config{BaseURL: server.URL, Token: "dk:credential", TargetTenantID: "tenant", HTTPClient: server.Client()})
 	selected, err := client.WithGrants("entity:record:read")
 	require.NoError(t, err)
 	selected = selected.WithSystemRole()
@@ -72,6 +72,6 @@ func TestClientSelectionStreamingRequest(t *testing.T) {
 	require.Equal(t, selected.Elevation(), elevation)
 	require.Equal(t, "Bearer dk:credential", header.Get("Authorization"))
 	require.Equal(t, "tenant", header.Get(TargetTenantIDHeader))
-	require.Equal(t, "trace", header.Get("traceparent"))
+	require.Empty(t, header.Get("traceparent"))
 	require.Same(t, client.http, selected.http)
 }

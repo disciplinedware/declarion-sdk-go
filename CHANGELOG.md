@@ -8,6 +8,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Changed
 
+- Platform callbacks use per-call W3C trace context; runtime RPC calls and HTTP sends create data-safe spans and correlated logs. Construction-time trace and baggage fields are removed in the coordinated source upgrade.
+- Shared `tracing` and `acstrace` packages provide bounded propagation and the ACS v0.1.0 span mapping; exporter setup remains with the host.
+
 - **Handlers select additional grants or System on independent contexts.** `runtime.HandlerCtx` and `platform.Client` provide `WithGrants` and `WithSystemRole`; derived clients preserve pooled transport and caller metadata. Signed continuations carry original authority, cumulative selection and bounded depth/expiry. Core and sidecars must update together.
 
 ## [v0.23.0] - 2026-10-02

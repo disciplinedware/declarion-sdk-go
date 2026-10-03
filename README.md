@@ -481,3 +481,26 @@ go test ./conformance/ -v
 ## License
 
 MIT
+# Distributed tracing
+
+`platform.Client` takes W3C trace context from each call's `context.Context`.
+Buffered, streaming and MCP calls share the same transport instrumentation.
+`runtime.HandlerCtx.Context` and `VerifierCtx.Context` carry the inbound RPC span.
+Sidecar hosts install their own OpenTelemetry TracerProvider and exporter; without
+a provider, callbacks preserve the inbound trace id without exporting spans.
+
+The `tracing` package exports HTTP instrumentation, context serialization and
+context-derived zap loggers. Tracing records no metrics, URLs, bodies, headers,
+client addresses or error text. Only declared platform hops inject
+`traceparent`, `tracestate` and the bounded `declarion.trace_path` Baggage member.
+Cross-origin redirects remove these headers. Incoming Baggage is adopted only
+after authentication, and cannot change authority or business data.
+
+`acstrace` uses the attributed ACS v0.1.0 mapping included in its package. Decision
+reasoning and provenance source identifiers are hashed before emission.
+Installing an already instrumented custom transport may produce its own spans
+in addition to the SDK's physical-send spans.
+
+The coordinated source upgrade removes `platform.Config.Traceparent`,
+`platform.Config.Baggage`, their client accessors and `HandlerCtx.Baggage`.
+Pass the current work context to each call instead.
