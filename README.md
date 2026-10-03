@@ -478,10 +478,7 @@ go test ./conformance/ -v
 | `DECLARION_JWT_SECRET` | JWT secret for token verification | (empty = no verification) |
 | `DECLARION_SIDECAR_ADDR` | Listen address | `:8080` |
 
-## License
-
-MIT
-# Distributed tracing
+## Distributed tracing
 
 `platform.Client` takes W3C trace context from each call's `context.Context`.
 Buffered, streaming and MCP calls share the same transport instrumentation.
@@ -506,8 +503,20 @@ Unknown HTTP methods use `HTTP` span names and `_OTHER` method attributes;
 `OTEL_INSTRUMENTATION_HTTP_KNOWN_METHODS` replaces the standard recognized set.
 Original unknown tokens are omitted under the attribute privacy policy.
 
-`acstrace` uses the attributed ACS v0.1.0 mapping included in its package. Decision
-reasoning and provenance source identifiers are hashed before emission.
+`acstrace` uses the attributed ACS v0.1.0 mapping included in its package.
+ACS v0.1.0 defines the skill lifecycle hooks but omits their trace mappings.
+Their spans use the exact protocol names `steps/skillRegister`,
+`steps/skillLoad` and `steps/skillUnload`; these names are deployment-specific,
+not standardized ACS span names. They allow the existing session, tenant and
+provenance attributes and share the standard decision event. Unknown methods
+remain uninstrumented.
+
+Decision reasoning and provenance source identifiers are hashed before emission.
+Decision events use the signed evaluator metadata (`deterministic`, `agent`, or
+`composite`), including evaluator version and model id when present. Missing
+evaluator metadata omits the event without marking a successful operation as failed.
+Invalid evaluator metadata records a span error without inventing a decision event;
+model evaluators require a model id. Business decisions remain unchanged.
 `acstrace.ProvenanceAttributes` reduces nonempty origins to one string or a
 sorted list and retains one distinct source. Pass its attributes to `acstrace.Start`,
 which hashes that source before recording the span.
@@ -517,3 +526,7 @@ in addition to the SDK's physical-send spans.
 The coordinated source upgrade removes `platform.Config.Traceparent`,
 `platform.Config.Baggage`, their client accessors and `HandlerCtx.Baggage`.
 Pass the current work context to each call instead.
+
+## License
+
+MIT

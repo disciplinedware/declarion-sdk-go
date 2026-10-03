@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
+	"github.com/disciplinedware/declarion-sdk-go/tracing"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -34,7 +36,12 @@ func loadMapping() map[string]Definition {
 	if err := json.Unmarshal(mappingJSON, &document); err != nil {
 		panic(err)
 	}
-	return document.Properties.Steps.Default
+	definitions := document.Properties.Steps.Default
+	// ACS v0.1.0 omits these mappings; their spans use the existing protocol names.
+	for _, method := range []string{"steps/skillRegister", "steps/skillLoad", "steps/skillUnload"} {
+		definitions[method] = Definition{Name: method, Optional: []string{"acs.session.id", "acs.tenant_id"}}
+	}
+	return definitions
 }
 
 func Lookup(method string) (Definition, bool) {
@@ -78,14 +85,35 @@ func Start(ctx context.Context, method string, attributes ...attribute.KeyValue)
 }
 
 type Decision struct {
-	Disposition string
-	Evaluator   string
-	Reasoning   string
-	Confidence  *float64
+	Disposition      string
+	Evaluator        string
+	EvaluatorVersion string
+	ModelID          string
+	Reasoning        string
+	Confidence       *float64
 }
 
 func EmitDecision(span trace.Span, decision Decision) {
+	if decision.Evaluator == "" {
+		return
+	}
+	switch decision.Evaluator {
+	case "deterministic", "agent", "composite":
+	default:
+		tracing.Fail(span, "invalid_evaluator")
+		return
+	}
+	if decision.Evaluator != "deterministic" && decision.ModelID == "" {
+		tracing.Fail(span, "missing_model_id")
+		return
+	}
 	attrs := []attribute.KeyValue{attribute.String("acs.decision", decision.Disposition), attribute.String("acs.evaluator", decision.Evaluator)}
+	if decision.EvaluatorVersion != "" {
+		attrs = append(attrs, attribute.String("acs.evaluator_version", decision.EvaluatorVersion))
+	}
+	if decision.ModelID != "" {
+		attrs = append(attrs, attribute.String("acs.model_id", decision.ModelID))
+	}
 	if decision.Reasoning != "" {
 		attrs = append(attrs, attribute.String("acs.reasoning", Hash(decision.Reasoning)))
 	}

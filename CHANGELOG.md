@@ -6,6 +6,14 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- ACS decision events use standard evaluator values and preserve evaluator version and model id. Missing optional evaluator metadata omits the event without fabricating a value or a failed operation.
+
+### Added
+
+- All nineteen native ACS hooks can be traced; the three skill hooks without normative trace mappings use their exact protocol method names.
+
 ### Changed
 
 - Platform callbacks use per-call W3C trace context; runtime RPC calls and HTTP sends create data-safe spans and correlated logs. Construction-time trace and baggage fields are removed in the coordinated source upgrade.
