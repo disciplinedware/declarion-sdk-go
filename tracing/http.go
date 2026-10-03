@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/disciplinedware/declarion-sdk-go/errs"
 	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -53,10 +54,20 @@ func TransportError(err error) string {
 		return "timeout"
 	}
 	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() {
-		return "timeout"
+	if errors.As(err, &ne) {
+		if ne.Timeout() {
+			return "timeout"
+		}
+		return "transport"
 	}
-	return "transport"
+	return "_OTHER"
+}
+
+func ErrorType(err error) string {
+	if declared, ok := errs.From(err); ok && errs.Declared(declared.Code()) {
+		return declared.Code()
+	}
+	return TransportError(err)
 }
 
 // ServerMiddleware's route callback must return a declared template, never a raw path.

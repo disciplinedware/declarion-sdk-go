@@ -8,6 +8,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- Trace error classification excludes undeclared peer codes and arbitrary error text. Generic failures use `_OTHER`; only actual network failures use `transport`.
+
 - ACS decision events use standard evaluator values and preserve evaluator version and model id. Missing optional evaluator metadata omits the event without fabricating a value or a failed operation.
 
 ### Added

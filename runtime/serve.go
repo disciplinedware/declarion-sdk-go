@@ -341,7 +341,7 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	if token != "" && (cfg.JWTSecret != "" || cfg.Authenticator != nil) {
 		verified.Context = tracing.AdoptPath(verified.Context, r.Header)
 	}
-	verified.Context = tracing.AppendPath(verified.Context, req.Method)
+	verified.Context = handlerTracePath(verified.Context, req.Method)
 	log = tracing.Logger(verified.Context, log)
 	handlerContext, cancel, timeoutErr := withHandlerTimeout(verified.Context, r.Header.Get(HandlerTimeoutHeader))
 	if timeoutErr != nil {
@@ -431,7 +431,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 			Because(fmt.Errorf("verifier token method mismatch: the token authorizes %q", claims.Method)))
 		return
 	}
-	ctx = tracing.AppendPath(tracing.AdoptPath(ctx, r.Header), req.Method)
+	ctx = handlerTracePath(tracing.AdoptPath(ctx, r.Header), req.Method)
 	r = r.WithContext(ctx)
 	log = tracing.Logger(ctx, log)
 	fn, ok := lookupVerifier(req.Method)

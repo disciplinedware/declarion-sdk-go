@@ -496,6 +496,14 @@ client addresses or error text. Only declared platform hops inject
 `traceparent`, `tracestate` and the bounded `declarion.trace_path` Baggage member.
 Cross-origin redirects remove these headers. Incoming Baggage is adopted only
 after authentication, and cannot change authority or business data.
+The runtime retains an authenticated path that already ends in its dispatched
+method without appending that same operation twice. Separate dispatches still
+extend the path, including recursive calls to the same handler.
+
+`tracing.ErrorType` emits an error code only when the host's process catalogue
+declares it. Other errors use fixed cancellation, timeout or network categories,
+or `_OTHER` when unclassified. `tracing.Fail` accepts a host-owned stable category;
+never pass a peer's message or unchecked error code to it.
 
 SDK HTTP span names use fixed API templates. Redirects within the same origin
 preserve context across hostname case and explicit default ports.
@@ -522,10 +530,6 @@ sorted list and retains one distinct source. Pass its attributes to `acstrace.St
 which hashes that source before recording the span.
 Installing an already instrumented custom transport may produce its own spans
 in addition to the SDK's physical-send spans.
-
-The coordinated source upgrade removes `platform.Config.Traceparent`,
-`platform.Config.Baggage`, their client accessors and `HandlerCtx.Baggage`.
-Pass the current work context to each call instead.
 
 ## License
 
