@@ -1,11 +1,16 @@
 package platform
 
 import (
-	"github.com/disciplinedware/declarion-sdk-go/tracing"
-	"github.com/stretchr/testify/require"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/disciplinedware/declarion-sdk-go/tracing"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestSharedClientUsesEachBufferedAndStreamingContext(t *testing.T) {
@@ -38,6 +43,38 @@ func TestSharedClientUsesEachBufferedAndStreamingContext(t *testing.T) {
 			require.Equal(t, parent, h.Get("traceparent"))
 			require.Equal(t, "vendor=value", h.Get("tracestate"))
 			require.Equal(t, "declarion.trace_path=handler", h.Get("baggage"))
+		}
+	}
+}
+
+func TestPlatformHTTPSpanUsesFixedTemplateAndOmitsUnknownPath(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	saved := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() {
+		otel.SetTracerProvider(saved)
+		require.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context())))
+	})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NotEmpty(t, r.Header.Get("traceparent"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	client := New(Config{BaseURL: server.URL + "/prefix", HTTPClient: server.Client()})
+	for _, path := range []string{"/api/data/secret-entity", "/api/actions/secret-code", "/secret-unknown"} {
+		_, status, _, err := client.do(t.Context(), http.MethodGet, path, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, status)
+	}
+	spans := recorder.Ended()
+	require.Len(t, spans, 3)
+	require.Equal(t, "GET /api/data/{entity}", spans[0].Name())
+	require.Equal(t, "GET /api/actions/{code}", spans[1].Name())
+	require.Equal(t, "GET", spans[2].Name())
+	for _, span := range spans {
+		for _, attr := range span.Attributes() {
+			require.NotContains(t, attr.Value.String(), "secret-")
 		}
 	}
 }

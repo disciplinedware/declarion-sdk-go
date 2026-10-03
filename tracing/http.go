@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/otel"
@@ -68,13 +69,20 @@ func ServerMiddleware(route func(*http.Request) string, skip func(*http.Request)
 }
 
 type transport struct {
-	base   http.RoundTripper
-	origin *url.URL
+	base     http.RoundTripper
+	origin   *url.URL
+	template func(*url.URL) string
 }
 
 func (t *transport) Unwrap() http.RoundTripper { return t.base }
 
-func HTTPClient(client *http.Client, platformURL string) *http.Client {
+type HTTPClientOption func(*transport)
+
+func WithURLTemplateLookup(lookup func(*url.URL) string) HTTPClientOption {
+	return func(t *transport) { t.template = lookup }
+}
+
+func HTTPClient(client *http.Client, platformURL string, options ...HTTPClientOption) *http.Client {
 	copyClient := *client
 	base := copyClient.Transport
 	if base == nil {
@@ -84,22 +92,41 @@ func HTTPClient(client *http.Client, platformURL string) *http.Client {
 	if platformURL != "" {
 		origin, _ = url.Parse(platformURL)
 	}
-	copyClient.Transport = &transport{base: base, origin: origin}
+	wrapper := &transport{base: base, origin: origin}
+	for _, option := range options {
+		option(wrapper)
+	}
+	copyClient.Transport = wrapper
 	return &copyClient
 }
 
-func sameOrigin(a, b *url.URL) bool { return a.Scheme == b.Scheme && a.Host == b.Host }
+func sameOrigin(a, b *url.URL) bool {
+	if !strings.EqualFold(a.Scheme, b.Scheme) || effectivePort(a) != effectivePort(b) {
+		return false
+	}
+	aHost, bHost := a.Hostname(), b.Hostname()
+	if aIP, bIP := net.ParseIP(aHost), net.ParseIP(bHost); aIP != nil && bIP != nil {
+		return aIP.Equal(bIP)
+	}
+	return strings.EqualFold(aHost, bHost)
+}
+
+func effectivePort(destination *url.URL) string {
+	if port := destination.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err == nil {
+			return strconv.Itoa(n)
+		}
+		return port
+	}
+	if strings.EqualFold(destination.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
 
 func DestinationAttributes(destination *url.URL) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{attribute.String("server.address", destination.Hostname())}
-	port := destination.Port()
-	if port == "" {
-		if destination.Scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
+	port := effectivePort(destination)
 	if n, err := strconv.Atoi(port); err == nil {
 		attrs = append(attrs, attribute.Int("server.port", n))
 	}
@@ -108,7 +135,14 @@ func DestinationAttributes(destination *url.URL) []attribute.KeyValue {
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	attrs := append(DestinationAttributes(req.URL), attribute.String("http.request.method", req.Method))
-	ctx, span := otel.Tracer(InstrumentationName).Start(req.Context(), req.Method, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+	name := req.Method
+	if t.template != nil && t.origin != nil && sameOrigin(t.origin, req.URL) {
+		if template := t.template(req.URL); template != "" {
+			name += " " + template
+			attrs = append(attrs, attribute.String("url.template", template))
+		}
+	}
+	ctx, span := otel.Tracer(InstrumentationName).Start(req.Context(), name, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 	defer span.End()
 	copyReq := req.Clone(ctx)
 	if t.origin != nil {

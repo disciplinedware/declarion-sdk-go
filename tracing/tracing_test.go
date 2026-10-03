@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -118,6 +119,32 @@ func TestHTTPClientPerSendAndRedirectPrivacy(t *testing.T) {
 		for _, attr := range span.Attributes() {
 			require.NotContains(t, attr.Value.Emit(), "secret")
 		}
+	}
+}
+
+func TestPlatformRedirectOriginUsesHostAndEffectivePort(t *testing.T) {
+	for _, tc := range []struct {
+		from, to    string
+		wantHeaders bool
+	}{
+		{"https://example.com", "https://EXAMPLE.COM:443/callback", true},
+		{"http://example.com:80", "http://example.com/callback", true},
+		{"https://[::1]", "https://[0:0:0:0:0:0:0:1]:443/callback", true},
+		{"https://example.com", "http://example.com/callback", false},
+		{"https://example.com", "https://example.com:444/callback", false},
+		{"https://example.com", "https://other.example/callback", false},
+	} {
+		t.Run(tc.to, func(t *testing.T) {
+			destination, err := url.Parse(tc.from)
+			require.NoError(t, err)
+			request, err := http.NewRequestWithContext(t.Context(), "GET", tc.to, nil)
+			require.NoError(t, err)
+			Inject(Restore(t.Context(), parent, "vendor=value"), request.Header)
+			client := PlatformClient(&http.Client{}, destination)
+			require.NoError(t, client.CheckRedirect(request, nil))
+			require.Equal(t, tc.wantHeaders, request.Header.Get("traceparent") != "")
+			require.Equal(t, tc.wantHeaders, sameOrigin(destination, request.URL))
+		})
 	}
 }
 

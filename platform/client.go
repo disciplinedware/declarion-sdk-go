@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/disciplinedware/declarion-sdk-go/execution"
-	"github.com/disciplinedware/declarion-sdk-go/tracing"
 )
 
 // MaxResponseSize caps platform API response bodies this client will read
@@ -85,7 +84,7 @@ func New(cfg Config) *Client {
 		}
 		httpClient = pooled
 	}
-	httpClient = tracing.HTTPClient(httpClient, cfg.BaseURL)
+	httpClient = tracedHTTPClient(httpClient, cfg.BaseURL)
 	return &Client{
 		elevation:    elevation,
 		selectionErr: selectionErr,

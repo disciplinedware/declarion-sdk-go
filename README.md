@@ -500,6 +500,9 @@ client addresses or error text. Only declared platform hops inject
 Cross-origin redirects remove these headers. Incoming Baggage is adopted only
 after authentication, and cannot change authority or business data.
 
+SDK HTTP span names use fixed API templates. Redirects within the same origin
+preserve context across hostname case and explicit default ports.
+
 `acstrace` uses the attributed ACS v0.1.0 mapping included in its package. Decision
 reasoning and provenance source identifiers are hashed before emission.
 Installing an already instrumented custom transport may produce its own spans
