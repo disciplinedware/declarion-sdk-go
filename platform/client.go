@@ -80,7 +80,8 @@ func New(cfg Config) *Client {
 	if httpClient == nil || httpClient.Transport == nil {
 		pooled := &http.Client{Transport: defaultTransport()}
 		if httpClient != nil {
-			pooled.Timeout = httpClient.Timeout
+			*pooled = *httpClient
+			pooled.Transport = defaultTransport()
 		}
 		httpClient = pooled
 	}

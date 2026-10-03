@@ -85,6 +85,16 @@ func (r *Registry[C]) Execute(code string, ctx C, params json.RawMessage) (json.
 	return h.exec(ctx, params)
 }
 
+func (r *Registry[C]) Has(code string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.handlers[code]
+	return ok
+}
+
 func (r *Registry[C]) Declarations() []Declaration {
 	if r == nil {
 		return nil

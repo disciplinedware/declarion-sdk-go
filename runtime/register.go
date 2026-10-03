@@ -29,6 +29,12 @@ func executeRegisteredHandler(code string, ctx *HandlerCtx, params json.RawMessa
 	return reg.Execute(code, ctx, params)
 }
 
+func hasRegisteredHandler(code string) bool {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	return handlerRegistry.Has(code)
+}
+
 func registeredDeclarations() []kern.Declaration {
 	registryMu.RLock()
 	reg := handlerRegistry

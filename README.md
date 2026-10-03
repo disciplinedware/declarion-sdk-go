@@ -489,8 +489,12 @@ Buffered, streaming and MCP calls share the same transport instrumentation.
 Sidecar hosts install their own OpenTelemetry TracerProvider and exporter; without
 a provider, callbacks preserve the inbound trace id without exporting spans.
 
-The `tracing` package exports HTTP instrumentation, context serialization and
-context-derived zap loggers. Tracing records no metrics, URLs, bodies, headers,
+The `tracing` package exports HTTP instrumentation, context serialization,
+destination attributes and context-derived zap loggers.
+RPC span names contain only registered method codes;
+unrecognized input retains the generic `rpc` name. Supplied HTTP clients keep
+their cookie jar and redirect policy when the SDK supplies a pooled transport.
+Tracing records no metrics, URLs, bodies, headers,
 client addresses or error text. Only declared platform hops inject
 `traceparent`, `tracestate` and the bounded `declarion.trace_path` Baggage member.
 Cross-origin redirects remove these headers. Incoming Baggage is adopted only

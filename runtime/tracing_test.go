@@ -42,6 +42,7 @@ func TestRPCTracingIncludesAuthenticatedWorkAndEarlyFailures(t *testing.T) {
 		{"valid", `{"jsonrpc":"2.0","id":"1","method":"test.trace","params":{}}`, mintTestToken(t, "tenant", "user", "test.trace", "audit"), codes.Unset},
 		{"invalid_token", `{"jsonrpc":"2.0","id":"1","method":"test.trace","params":{}}`, "invalid", codes.Error},
 		{"invalid_body", `{`, "invalid", codes.Error},
+		{"unknown_method", `{"jsonrpc":"2.0","id":"1","method":"secret-token-in-method","params":{}}`, mintTestToken(t, "tenant", "user", "secret-token-in-method", "audit"), codes.Error},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "http://sidecar/rpc", strings.NewReader(tc.body))
@@ -50,12 +51,18 @@ func TestRPCTracingIncludesAuthenticatedWorkAndEarlyFailures(t *testing.T) {
 			req.Header.Set("Authorization", "Bearer "+tc.token)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
-			_, err := io.Copy(io.Discard, w.Result().Body)
+			response := w.Result()
+			defer func() { require.NoError(t, response.Body.Close()) }()
+			_, err := io.Copy(io.Discard, response.Body)
 			require.NoError(t, err)
 			span := r.Ended()[len(r.Ended())-1]
 			require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", span.SpanContext().TraceID().String())
 			require.Equal(t, "bbbbbbbbbbbbbbbb", span.Parent().SpanID().String())
 			require.Equal(t, tc.status, span.Status().Code)
+			require.NotContains(t, span.Name(), "secret-token-in-method")
+			for _, attr := range span.Attributes() {
+				require.NotContains(t, attr.Value.Emit(), "secret-token-in-method")
+			}
 		})
 	}
 	require.True(t, sc.IsValid())

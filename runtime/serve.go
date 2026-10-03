@@ -296,8 +296,11 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 		writeError(ctx, w, cfg.Logger, "", JSONRPCParseError, errs.New("platform.invalid_body").Because(err))
 		return
 	}
-	span.SetName(req.Method)
-	span.SetAttributes(attribute.String("rpc.method", req.Method))
+	_, verifierRegistered := lookupVerifier(req.Method)
+	if hasRegisteredHandler(req.Method) || verifierRegistered {
+		span.SetName(req.Method)
+		span.SetAttributes(attribute.String("rpc.method", req.Method))
+	}
 	log := cfg.Logger.With(zap.String("method", req.Method))
 
 	// Check protocol version (now req.ID is available for error correlation).

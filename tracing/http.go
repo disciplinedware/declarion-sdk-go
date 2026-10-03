@@ -90,20 +90,26 @@ func HTTPClient(client *http.Client, platformURL string) *http.Client {
 
 func sameOrigin(a, b *url.URL) bool { return a.Scheme == b.Scheme && a.Host == b.Host }
 
-func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := otel.Tracer(InstrumentationName).Start(req.Context(), req.Method, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attribute.String("http.request.method", req.Method), attribute.String("server.address", req.URL.Hostname())))
-	defer span.End()
-	port := req.URL.Port()
+func DestinationAttributes(destination *url.URL) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{attribute.String("server.address", destination.Hostname())}
+	port := destination.Port()
 	if port == "" {
-		if req.URL.Scheme == "https" {
+		if destination.Scheme == "https" {
 			port = "443"
 		} else {
 			port = "80"
 		}
 	}
 	if n, err := strconv.Atoi(port); err == nil {
-		span.SetAttributes(attribute.Int("server.port", n))
+		attrs = append(attrs, attribute.Int("server.port", n))
 	}
+	return attrs
+}
+
+func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	attrs := append(DestinationAttributes(req.URL), attribute.String("http.request.method", req.Method))
+	ctx, span := otel.Tracer(InstrumentationName).Start(req.Context(), req.Method, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
+	defer span.End()
 	copyReq := req.Clone(ctx)
 	if t.origin != nil {
 		Strip(copyReq.Header)
