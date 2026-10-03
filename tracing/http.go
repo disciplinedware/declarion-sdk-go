@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,27 @@ import (
 )
 
 const InstrumentationName = "github.com/disciplinedware/declarion-sdk-go/tracing"
+
+func knownHTTPMethods() map[string]bool {
+	methods := []string{http.MethodConnect, http.MethodDelete, http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPatch, http.MethodPost, http.MethodPut, http.MethodTrace, "QUERY"}
+	if configured, exists := os.LookupEnv("OTEL_INSTRUMENTATION_HTTP_KNOWN_METHODS"); exists {
+		methods = strings.Split(configured, ",")
+	}
+	known := make(map[string]bool, len(methods))
+	for _, method := range methods {
+		if method != "" {
+			known[method] = true
+		}
+	}
+	return known
+}
+
+func httpMethod(method string, known map[string]bool) (string, string) {
+	if known[method] {
+		return method, method
+	}
+	return "_OTHER", "HTTP"
+}
 
 func Fail(span trace.Span, errorType string) {
 	span.SetAttributes(attribute.String("error.type", errorType))
@@ -39,18 +61,20 @@ func TransportError(err error) string {
 
 // ServerMiddleware's route callback must return a declared template, never a raw path.
 func ServerMiddleware(route func(*http.Request) string, skip func(*http.Request) bool) func(http.Handler) http.Handler {
+	known := knownHTTPMethods()
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if skip != nil && skip(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
-			ctx := WithWork(ExtractTrace(r.Context(), r.Header), "", "http:"+r.Method)
+			method, name := httpMethod(r.Method, known)
+			ctx := WithWork(ExtractTrace(r.Context(), r.Header), "", "http:"+name)
 			scheme := "http"
 			if r.TLS != nil {
 				scheme = "https"
 			}
-			ctx, span := otel.Tracer(InstrumentationName).Start(ctx, r.Method, trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", r.Method), attribute.String("url.scheme", scheme)))
+			ctx, span := otel.Tracer(InstrumentationName).Start(ctx, name, trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", method), attribute.String("url.scheme", scheme)))
 			defer span.End()
 			request := r.WithContext(ctx)
 			metrics := httpsnoop.CaptureMetrics(next, w, request)
@@ -60,7 +84,7 @@ func ServerMiddleware(route func(*http.Request) string, skip func(*http.Request)
 			}
 			if route != nil {
 				if template := route(request); template != "" {
-					span.SetName(r.Method + " " + template)
+					span.SetName(name + " " + template)
 					span.SetAttributes(attribute.String("http.route", template))
 				}
 			}
@@ -72,6 +96,7 @@ type transport struct {
 	base     http.RoundTripper
 	origin   *url.URL
 	template func(*url.URL) string
+	methods  map[string]bool
 }
 
 func (t *transport) Unwrap() http.RoundTripper { return t.base }
@@ -92,7 +117,7 @@ func HTTPClient(client *http.Client, platformURL string, options ...HTTPClientOp
 	if platformURL != "" {
 		origin, _ = url.Parse(platformURL)
 	}
-	wrapper := &transport{base: base, origin: origin}
+	wrapper := &transport{base: base, origin: origin, methods: knownHTTPMethods()}
 	for _, option := range options {
 		option(wrapper)
 	}
@@ -134,8 +159,8 @@ func DestinationAttributes(destination *url.URL) []attribute.KeyValue {
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	attrs := append(DestinationAttributes(req.URL), attribute.String("http.request.method", req.Method))
-	name := req.Method
+	method, name := httpMethod(req.Method, t.methods)
+	attrs := append(DestinationAttributes(req.URL), attribute.String("http.request.method", method))
 	if t.template != nil && t.origin != nil && sameOrigin(t.origin, req.URL) {
 		if template := t.template(req.URL); template != "" {
 			name += " " + template

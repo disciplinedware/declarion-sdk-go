@@ -502,6 +502,9 @@ after authentication, and cannot change authority or business data.
 
 SDK HTTP span names use fixed API templates. Redirects within the same origin
 preserve context across hostname case and explicit default ports.
+Unknown HTTP methods use `HTTP` span names and `_OTHER` method attributes;
+`OTEL_INSTRUMENTATION_HTTP_KNOWN_METHODS` replaces the standard recognized set.
+Original unknown tokens are omitted under the attribute privacy policy.
 
 `acstrace` uses the attributed ACS v0.1.0 mapping included in its package. Decision
 reasoning and provenance source identifiers are hashed before emission.
