@@ -12,6 +12,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 - Shared `tracing` and `acstrace` packages provide bounded propagation and the ACS v0.1.0 span mapping; exporter setup remains with the host.
 - SDK HTTP spans use fixed API templates; same-origin redirects preserve context across hostname case and explicit default ports.
 - Unknown HTTP methods use bounded span names and attributes; standard method configuration remains available.
+- ACS clients and servers share provenance reduction and source hashing.
 
 - **Handlers select additional grants or System on independent contexts.** `runtime.HandlerCtx` and `platform.Client` provide `WithGrants` and `WithSystemRole`; derived clients preserve pooled transport and caller metadata. Signed continuations carry original authority, cumulative selection and bounded depth/expiry. Core and sidecars must update together.
 

@@ -508,6 +508,9 @@ Original unknown tokens are omitted under the attribute privacy policy.
 
 `acstrace` uses the attributed ACS v0.1.0 mapping included in its package. Decision
 reasoning and provenance source identifiers are hashed before emission.
+`acstrace.ProvenanceAttributes` reduces nonempty origins to one string or a
+sorted list and retains one distinct source. Pass its attributes to `acstrace.Start`,
+which hashes that source before recording the span.
 Installing an already instrumented custom transport may produce its own spans
 in addition to the SDK's physical-send spans.
 
