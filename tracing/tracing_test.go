@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
@@ -163,7 +164,13 @@ func TestContextLoggerUpdatesSpanWithoutDuplicateFields(t *testing.T) {
 	require.Equal(t, inner.SpanContext().SpanID().String(), entry.ContextMap()["span_id"])
 	require.Equal(t, "handler", entry.ContextMap()["trace_path"])
 	require.Equal(t, "model-step", entry.ContextMap()["model_request_id"])
-	require.Len(t, entry.Context, 5)
+	printed := 0
+	for _, field := range entry.Context {
+		if field.Type != zapcore.SkipType {
+			printed++
+		}
+	}
+	require.Equal(t, 5, printed, "each correlation key once, plus the caller's own field")
 	Logger(WithWork(t.Context(), "request", "handler"), base).Info("root")
 	require.NotContains(t, observed.All()[1].ContextMap(), "trace_id")
 	require.False(t, trace.SpanContextFromContext(t.Context()).IsValid())

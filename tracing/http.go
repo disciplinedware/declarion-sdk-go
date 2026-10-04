@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -114,6 +115,7 @@ type transport struct {
 	origin   *url.URL
 	template func(*url.URL) string
 	methods  map[string]bool
+	forward  bool
 }
 
 func (t *transport) Unwrap() http.RoundTripper { return t.base }
@@ -122,6 +124,13 @@ type HTTPClientOption func(*transport)
 
 func WithURLTemplateLookup(lookup func(*url.URL) string) HTTPClientOption {
 	return func(t *transport) { t.template = lookup }
+}
+
+// ForwardTraceContext is for a gateway forwarding a caller's own request: every send
+// replaces traceparent and tracestate with its own span and leaves every other header,
+// baggage included, as the caller sent it.
+func ForwardTraceContext() HTTPClientOption {
+	return func(t *transport) { t.forward = true }
 }
 
 func HTTPClient(client *http.Client, platformURL string, options ...HTTPClientOption) *http.Client {
@@ -187,6 +196,11 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	ctx, span := otel.Tracer(InstrumentationName).Start(req.Context(), name, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attrs...))
 	defer span.End()
 	copyReq := req.Clone(ctx)
+	if t.forward {
+		copyReq.Header.Del("traceparent")
+		copyReq.Header.Del("tracestate")
+		propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(copyReq.Header))
+	}
 	if t.origin != nil {
 		Strip(copyReq.Header)
 		if sameOrigin(t.origin, req.URL) {

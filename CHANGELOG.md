@@ -18,6 +18,7 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Added
 
+- `tracing.ForwardTraceContext()` makes an HTTP client a hop of a forwarded caller request: each send replaces `traceparent`/`tracestate` with its own span and keeps the caller's other headers, baggage included. `tracing.Logger` hands the work's context to an OpenTelemetry log bridge (such as otelzap) through a field text encoders do not print, so exported log records carry the span's trace and span ids.
 - All nineteen native ACS hooks can be traced; the three skill hooks without normative trace mappings use their exact protocol method names.
 - Action invocations and `system.batch` operations can carry typed `params_file_ref` descriptors, and `BatchBodyBytes` exposes the exact canonical batch request bytes.
 - `platform.Client.EntitySchema` reads the authenticated native entity schema.

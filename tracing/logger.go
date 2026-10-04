@@ -50,7 +50,10 @@ func (c *contextCore) Write(entry zapcore.Entry, fields []zapcore.Field) error {
 	fields = withoutCorrelation(fields)
 	sc := trace.SpanContextFromContext(c.ctx)
 	if sc.IsValid() {
-		fields = append(fields, zap.String("trace_id", sc.TraceID().String()), zap.String("span_id", sc.SpanID().String()))
+		fields = append(fields, zap.String("trace_id", sc.TraceID().String()), zap.String("span_id", sc.SpanID().String()),
+			// Invisible to text encoders; an OpenTelemetry log bridge such as otelzap
+			// takes it as the record's context and sets its trace and span ids.
+			zap.Field{Key: "context", Type: zapcore.SkipType, Interface: c.ctx})
 	}
 	id, path := Work(c.ctx)
 	if id != "" {
