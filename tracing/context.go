@@ -13,7 +13,10 @@ import (
 const TracePathMember = "declarion.trace_path"
 const MaxTracePathBytes = 256
 
-var Propagator = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{})
+// Propagator is the process-wide propagator a host installs: W3C trace context only.
+// The one Baggage member the platform carries travels through Inject and AdoptPath,
+// so generic instrumentation built on the global propagator forwards no caller baggage.
+var Propagator propagation.TextMapPropagator = propagation.TraceContext{}
 
 type workKey struct{}
 type work struct{ RequestID, TracePath string }

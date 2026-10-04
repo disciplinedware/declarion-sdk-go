@@ -78,3 +78,7 @@ func (b bridgeCore) Write(_ zapcore.Entry, fields []zapcore.Field) error {
 func (b bridgeCore) Check(entry zapcore.Entry, checked *zapcore.CheckedEntry) *zapcore.CheckedEntry {
 	return checked.AddCore(entry, b)
 }
+
+func TestTheGlobalPropagatorCarriesTraceContextOnly(t *testing.T) {
+	require.ElementsMatch(t, []string{"traceparent", "tracestate"}, Propagator.Fields())
+}
