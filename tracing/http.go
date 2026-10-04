@@ -90,7 +90,9 @@ func ServerMiddleware(route func(*http.Request) string, skip func(*http.Request)
 			defer span.End()
 			defer func() {
 				if recovered := recover(); recovered != nil {
-					Fail(span, "panic")
+					if recovered != http.ErrAbortHandler {
+						Fail(span, "panic")
+					}
 					panic(recovered)
 				}
 			}()

@@ -69,7 +69,18 @@ func TestServerTracingMarksAPanicAndLetsItPropagate(t *testing.T) {
 	require.Equal(t, codes.Error, span.Status().Code)
 	attrs := map[string]string{}
 	for _, attr := range span.Attributes() {
-		attrs[string(attr.Key)] = attr.Value.Emit()
+		attrs[string(attr.Key)] = attr.Value.String()
 	}
 	require.Equal(t, "panic", attrs["error.type"])
+}
+
+func TestServerTracingLeavesADeliberateAbortUnmarked(t *testing.T) {
+	r := recorder(t)
+	handler := ServerMiddleware(nil, nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	require.PanicsWithValue(t, http.ErrAbortHandler, func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://service/", nil))
+	})
+	require.NotEqual(t, codes.Error, r.Ended()[0].Status().Code)
 }

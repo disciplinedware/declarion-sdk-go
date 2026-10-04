@@ -40,7 +40,7 @@ func TestProvenanceAggregationAndEmission(t *testing.T) {
 			attributes := map[string]attribute.Value{}
 			for _, attr := range recorder.Ended()[0].Attributes() {
 				attributes[string(attr.Key)] = attr.Value
-				require.NotContains(t, attr.Value.Emit(), "private")
+				require.NotContains(t, attr.Value.String(), "private")
 			}
 			if test.origins == nil {
 				require.NotContains(t, attributes, "acs.provenance.origin")

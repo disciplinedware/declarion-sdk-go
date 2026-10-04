@@ -72,7 +72,7 @@ func TestRPCTracingIncludesAuthenticatedWorkAndEarlyFailures(t *testing.T) {
 			require.Equal(t, tc.status, span.Status().Code)
 			require.NotContains(t, span.Name(), "secret-token-in-method")
 			for _, attr := range span.Attributes() {
-				require.NotContains(t, attr.Value.Emit(), "secret-token-in-method")
+				require.NotContains(t, attr.Value.String(), "secret-token-in-method")
 			}
 		})
 	}
@@ -137,8 +137,8 @@ func TestRPCFailuresCarryBoundedErrorTypes(t *testing.T) {
 			require.Equal(t, codes.Error, span.Status().Code)
 			attrs := map[string]string{}
 			for _, attr := range span.Attributes() {
-				attrs[string(attr.Key)] = attr.Value.Emit()
-				require.NotContains(t, attr.Value.Emit(), "secret")
+				attrs[string(attr.Key)] = attr.Value.String()
+				require.NotContains(t, attr.Value.String(), "secret")
 			}
 			require.Equal(t, tc.wantType, attrs["error.type"])
 			require.Equal(t, tc.wantStatus, attrs["rpc.response.status_code"])

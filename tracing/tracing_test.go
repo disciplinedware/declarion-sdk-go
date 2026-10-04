@@ -81,7 +81,7 @@ func TestHTTPSpanPrivacyAndParent(t *testing.T) {
 	allowed := map[attribute.Key]bool{"http.request.method": true, "http.route": true, "http.response.status_code": true, "url.scheme": true, "error.type": true}
 	for _, attr := range spans[0].Attributes() {
 		require.True(t, allowed[attr.Key], string(attr.Key))
-		require.NotContains(t, attr.Value.Emit(), "secret-")
+		require.NotContains(t, attr.Value.String(), "secret-")
 	}
 }
 
@@ -118,7 +118,7 @@ func TestHTTPClientPerSendAndRedirectPrivacy(t *testing.T) {
 	for _, span := range r.Ended() {
 		require.Equal(t, "GET", span.Name())
 		for _, attr := range span.Attributes() {
-			require.NotContains(t, attr.Value.Emit(), "secret")
+			require.NotContains(t, attr.Value.String(), "secret")
 		}
 	}
 }

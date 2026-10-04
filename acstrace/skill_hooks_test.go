@@ -60,7 +60,7 @@ func TestUnmappedSkillHooksUseTheirProtocolMethods(t *testing.T) {
 			attributes := map[string]attribute.Value{}
 			for _, attribute := range ended.Attributes() {
 				attributes[string(attribute.Key)] = attribute.Value
-				require.NotContains(t, attribute.Value.Emit(), "secret")
+				require.NotContains(t, attribute.Value.String(), "secret")
 			}
 			require.Equal(t, "session", attributes["acs.session.id"].AsString())
 			require.Equal(t, "tenant", attributes["acs.tenant_id"].AsString())

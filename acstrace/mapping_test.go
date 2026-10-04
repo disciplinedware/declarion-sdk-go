@@ -90,7 +90,7 @@ func TestMappingAndDecisionPrivacy(t *testing.T) {
 			keys := map[string]bool{}
 			for _, attr := range ended.Attributes() {
 				keys[string(attr.Key)] = true
-				require.NotContains(t, attr.Value.Emit(), "secret")
+				require.NotContains(t, attr.Value.String(), "secret")
 			}
 			for _, key := range definition.Required {
 				require.True(t, keys[key], key)
@@ -99,7 +99,7 @@ func TestMappingAndDecisionPrivacy(t *testing.T) {
 			require.Len(t, ended.Events(), 1)
 			require.Equal(t, "acs.decision", ended.Events()[0].Name)
 			for _, attr := range ended.Events()[0].Attributes {
-				require.NotContains(t, attr.Value.Emit(), "secret")
+				require.NotContains(t, attr.Value.String(), "secret")
 			}
 		})
 	}
