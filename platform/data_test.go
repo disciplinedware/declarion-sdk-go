@@ -624,12 +624,12 @@ func TestBulkDelete_where_sends_filters(t *testing.T) {
 	srv, cap := newCaptureServer(t, `{"status":"success","result":{"deleted":7}}`)
 
 	c := New(Config{BaseURL: srv.URL, HTTPClient: srv.Client()})
-	res, err := c.Data().BulkDelete(t.Context(), "arm_result", nil,
-		DeleteWhere(Eq("backtest_id", "b1"), Eq("execution_origin", "backtest")))
+	res, err := c.Data().BulkDelete(t.Context(), "document", nil,
+		DeleteWhere(Eq("parent_id", "b1"), Eq("execution_mode", "replay")))
 	if err != nil {
 		t.Fatalf("BulkDelete: %v", err)
 	}
-	if cap.path != "/api/actions/arm_result.__delete" {
+	if cap.path != "/api/actions/document.__delete" {
 		t.Errorf("path: got %q", cap.path)
 	}
 	if _, present := cap.body["object_ids"]; present {
@@ -640,7 +640,7 @@ func TestBulkDelete_where_sends_filters(t *testing.T) {
 		t.Fatalf("body.filters: got %+v, want 2 nodes", cap.body["filters"])
 	}
 	first, _ := filters[0].(map[string]any)
-	if first["field"] != "backtest_id" || first["op"] != "eq" || first["value"] != "b1" {
+	if first["field"] != "parent_id" || first["op"] != "eq" || first["value"] != "b1" {
 		t.Errorf("body.filters[0]: got %+v", first)
 	}
 	if res.Deleted != 7 {

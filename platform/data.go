@@ -539,11 +539,11 @@ type deleteOptions struct {
 // them through the normal per-row path - hooks, audit before-images and file
 // cascades all still run.
 //
-//	// every result row of one backtest
-//	client.BulkDelete(ctx, "arm_result", nil,
+//	// every child row of one operation
+//	client.BulkDelete(ctx, "document", nil,
 //	    platform.DeleteWhere(
-//	        platform.Eq("backtest_id", id),
-//	        platform.Eq("execution_origin", "backtest"),
+//	        platform.Eq("parent_id", id),
+//	        platform.Eq("execution_mode", "replay"),
 //	    ))
 //
 // Passed together with object_ids it is a GUARD - "delete these ids, but only

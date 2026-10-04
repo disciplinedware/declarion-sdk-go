@@ -82,8 +82,8 @@ func TestNewFillsStatusAndRetryabilityFromTheCatalogue(t *testing.T) {
 func TestNewWithoutCatalogueStillWorks(t *testing.T) {
 	errs.SetCatalogue(nil, "")
 
-	e := errs.New("swiftward-community.decision_locked", errs.Args{"channel_id": 7})
-	assert.Equal(t, "/errors/swiftward-community.decision_locked", e.Type)
+	e := errs.New("example-community.decision_locked", errs.Args{"channel_id": 7})
+	assert.Equal(t, "/errors/example-community.decision_locked", e.Type)
 	assert.Equal(t, 0, e.Status)
 	v, ok := e.Ext("channel_id")
 	assert.True(t, ok)
@@ -333,10 +333,10 @@ func TestValidCode(t *testing.T) {
 		want bool
 	}{
 		{name: "core_domain_word", code: "auth.invalid_credentials", want: true},
-		{name: "hyphenated_manifest_name", code: "swiftward-llm-gateway.model_unavailable", want: true},
+		{name: "hyphenated_manifest_name", code: "example-llm-gateway.model_unavailable", want: true},
 		{name: "upper_snake_is_the_old_spelling", code: "STALE_OBJECT", want: false},
 		{name: "no_owner", code: "stale_object", want: false},
-		{name: "underscore_in_owner", code: "swiftward_community.decision_locked", want: false},
+		{name: "underscore_in_owner", code: "example_community.decision_locked", want: false},
 		{name: "trailing_dot", code: "auth.", want: false},
 	}
 	for _, tt := range tests {

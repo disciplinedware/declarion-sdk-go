@@ -30,6 +30,9 @@ type InvokeParams struct {
 	// IDs are the object IDs for single/batch-scope actions. Forbidden
 	// for global-scope actions.
 	IDs []string
+	// ParamsFileRef identifies JSON handler parameters stored as a file reference.
+	// The descriptor is sent in the action envelope, beside Args.
+	ParamsFileRef *ArgsReference
 	// TargetTenantID sends X-Declarion-Tenant-ID for this invocation.
 	// Mutually exclusive with TargetTenantCode.
 	TargetTenantID string
@@ -94,6 +97,9 @@ func (a *ActionsClient) Invoke(ctx context.Context, code string, params InvokePa
 	}
 	if params.IDs != nil {
 		body["object_ids"] = params.IDs
+	}
+	if params.ParamsFileRef != nil {
+		body["params_file_ref"] = params.ParamsFileRef
 	}
 	respBody, status, contentType, err := a.c.do(ctx, "POST", fmt.Sprintf("/api/actions/%s", code), nil, body, targetTenantOptions(params.TargetTenantID, params.TargetTenantCode)...)
 	if err != nil {

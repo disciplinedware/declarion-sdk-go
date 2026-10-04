@@ -27,9 +27,10 @@ import (
 // fields, condition, ...). The dispatcher applies them verbatim. No `_ids`,
 // no `items[]`, and never `object_ids` (that lives at the op top level).
 type BatchOp struct {
-	Action    string         `json:"action"`
-	ObjectIDs []string       `json:"object_ids,omitempty"`
-	Params    map[string]any `json:"params"`
+	Action        string         `json:"action"`
+	ObjectIDs     []string       `json:"object_ids,omitempty"`
+	Params        map[string]any `json:"params"`
+	ParamsFileRef *ArgsReference `json:"params_file_ref,omitempty"`
 }
 
 // BatchOpResult is the per-op result returned by system.batch.
@@ -219,11 +220,11 @@ func (b *Batch) Execute(ctx context.Context) (*BatchResponse, error) {
 	if len(b.ops) == 0 {
 		return nil, fmt.Errorf("declarion: batch.Execute called with no ops; add ops via .Call / .Create / .Upsert / .Update / .Delete / .Restore")
 	}
-	body := map[string]any{
-		"actions": b.ops,
-		"atomic":  true,
+	body, err := BatchBodyBytes(b.ops)
+	if err != nil {
+		return nil, fmt.Errorf("marshal batch request: %w", err)
 	}
-	respBody, status, contentType, err := b.c.do(ctx, "POST", "/api/actions/system.batch", nil, body, targetTenantOptions(b.tenantID, b.tenantCode)...)
+	respBody, status, contentType, err := b.c.do(ctx, "POST", "/api/actions/system.batch", nil, json.RawMessage(body), targetTenantOptions(b.tenantID, b.tenantCode)...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +243,13 @@ func (b *Batch) Execute(ctx context.Context) (*BatchResponse, error) {
 		return nil, fmt.Errorf("batch response missing result body: %s", string(respBody))
 	}
 	return envelope.Result, nil
+}
+
+func BatchBodyBytes(ops []BatchOp) ([]byte, error) {
+	return json.Marshal(struct {
+		Actions []BatchOp `json:"actions"`
+		Atomic  bool      `json:"atomic"`
+	}{Actions: ops, Atomic: true})
 }
 
 // toParamsMap converts an arbitrary value to map[string]any via JSON

@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+- **`jsondoc.ValidateNumbers` applies the shared safe JSON integer range.** It checks nested Go containers, rejects non-finite and malformed numbers, and refuses nonzero values that underflow binary64. Larger exact integers must be encoded as strings.
+
 ### Fixed
 
 - Trace error classification excludes undeclared peer codes and arbitrary error text. Generic failures use `_OTHER`; only actual network failures use `transport`.
@@ -15,6 +17,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 ### Added
 
 - All nineteen native ACS hooks can be traced; the three skill hooks without normative trace mappings use their exact protocol method names.
+- Action invocations and `system.batch` operations can carry typed `params_file_ref` descriptors, and `BatchBodyBytes` exposes the exact canonical batch request bytes.
+- `platform.Client.EntitySchema` reads the authenticated native entity schema.
+- File-reference runtime reads verify complete response bytes against the key digest; `fileref.VerifyContent` exposes shared size and digest verification, and caller-cap refusal has a typed error.
 
 ### Changed
 

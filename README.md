@@ -126,6 +126,57 @@ down a closed socket and gets `connection reset by peer` or `EOF`, and Go does
 not retry a POST. Go's default transport keeps idle connections 90 s, so it is
 never used.
 
+## File references
+
+`platform.Client` uploads immutable reference content and reads it through the
+platform's authenticated transport:
+
+```go
+receipt, err := client.UploadFileReference(ctx, "record", "payload", content, retryKey)
+content, err := client.ReadFileReferenceRuntime(ctx, "record", "payload", receipt.Key, maxBytes)
+```
+
+The upload returns the key, byte count, digest, and optional expiry. Runtime
+reads require a positive caller-supplied byte limit and return an error without
+partial content when the response exceeds that limit. Runtime reads also
+verify the content against the digest in the reference key. Both methods accept
+`platform.RequestOption` values for tenant selection and preserve the client's
+credentials, forwarding, elevation, and trace context. Declarion authorizes the
+upload and runtime read against the declared `file_ref` field.
+`fileref.Key.String` returns an empty string when the exported key fields are invalid.
+`fileref.VerifyContent` also checks an expected byte count when one is available;
+zero means the caller has no recorded size. `platform.ErrFileReferenceLimit`
+identifies responses refused by the caller's read cap.
+
+## Bounded JSON preflight
+
+`jsondoc.ValidateDecodedBudget` checks JSON structure before an application
+materializes an aggregate value:
+
+```go
+if err := jsondoc.ValidateDecodedBudget(raw, decodedMemoryBytes); err != nil {
+	return err
+}
+```
+
+The positive byte limit bounds raw input and a structural estimate based on Go
+representation sizes, key and string bytes, object members, and array elements.
+The estimate is deliberately conservative and does not guarantee a process
+heap ceiling. Callers choose the limit; the SDK supplies no operational default.
+
+`jsondoc.ValidateNumbers` checks numeric Go values before serialization. It
+rejects non-finite values, malformed `json.Number` values, nonzero numbers that
+underflow binary64, and integer-valued numbers outside the safe range
+`[-(2^53-1), 2^53-1]`. It checks nested maps, slices and arrays. Encode larger
+integers as strings when their exact value must survive JSON consumers.
+
+## Entity schema
+
+`platform.Client.EntitySchema` returns the native entity schema from
+`GET /api/schema/entities/{code}`. The client uses its configured bearer,
+tenant, forwarding, tracing, and transport options; request options can select
+a target tenant. The returned map is the response's `data` entity object.
+
 ## Platform MCP
 
 `ctx.Platform.MCP().Connect(ctx.Context)` opens Declarion's `/api/mcp` endpoint

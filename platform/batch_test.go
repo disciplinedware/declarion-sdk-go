@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func TestBatchBodyBytesIncludesArgsReferenceInCanonicalEnvelope(t *testing.T) {
+	ref := &ArgsReference{EntityCode: "record", FieldCode: "body", Key: "key", SizeBytes: 42, JSONPointer: "/actions/0/params"}
+	body, err := BatchBodyBytes([]BatchOp{{Action: "rules.run", Params: map[string]any{"trace_id": "t1"}, ParamsFileRef: ref}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"actions":[{"action":"rules.run","params":{"trace_id":"t1"},"params_file_ref":{"entity_code":"record","field_code":"body","key":"key","size_bytes":42,"json_pointer":"/actions/0/params"}}],"atomic":true}`
+	if string(body) != want {
+		t.Fatalf("body = %s, want %s", body, want)
+	}
+}
+
 // TestBatch_typed_helpers_build_flat_envelopes pins the FLAT body each
 // Batch.{Create,Upsert,Update,Delete,Restore} op carries. The system.batch
 // dispatcher applies these maps verbatim as the FLAT action body for the
@@ -178,8 +190,7 @@ func TestBatch_Update_wire_puts_object_ids_top_level(t *testing.T) {
 	}
 }
 
-// TestBatch_AddOp_passthrough proves a pre-built op (the path swiftward's
-// worker uses to ship []BatchOp it assembled itself) reaches the wire verbatim,
+// TestBatch_AddOp_passthrough proves a pre-built op reaches the wire verbatim,
 // object_ids at the op top level.
 func TestBatch_AddOp_passthrough(t *testing.T) {
 	b := (&Client{}).NewBatch().AddOp(BatchOp{

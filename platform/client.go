@@ -160,6 +160,18 @@ func (c *Client) MCP() *MCPClient {
 // streaming Actions().InvokeStreaming path so header construction and the
 // dk:/Bearer auth rule live in one place.
 func (c *Client) newRequest(ctx context.Context, method, path string, query url.Values, body any, opts ...RequestOption) (*http.Request, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("marshal request body: %w", err)
+		}
+		bodyReader = bytes.NewReader(b)
+	}
+	return c.newRequestWithBodyReader(ctx, method, path, query, bodyReader, "application/json", opts...)
+}
+
+func (c *Client) newRequestWithBodyReader(ctx context.Context, method, path string, query url.Values, body io.Reader, contentType string, opts ...RequestOption) (*http.Request, error) {
 	if c.baseURL == "" {
 		return nil, fmt.Errorf("platform client: BaseURL not configured (set DECLARION_PLATFORM_URL)")
 	}
@@ -172,28 +184,21 @@ func (c *Client) newRequest(ctx context.Context, method, path string, query url.
 	if ro.tenantID != "" && ro.tenantCode != "" {
 		return nil, fmt.Errorf("platform client: target tenant id and code are mutually exclusive")
 	}
-
-	var bodyReader io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("marshal request body: %w", err)
-		}
-		bodyReader = bytes.NewReader(b)
-	}
-
 	u := c.baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, u, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, u, body)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
 	if err := c.applyHeaders(req, ro); err != nil {
 		return nil, err
+	}
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	return req, nil
 }
@@ -256,13 +261,11 @@ func (c *Client) exchange(ctx context.Context, method, path string, query url.Va
 	if err != nil {
 		return response{}, err
 	}
-
-	resp, err := c.http.Do(req)
+	resp, err := c.executeRequest(req, path)
 	if err != nil {
-		return response{}, errorFromTransport(path, err)
+		return response{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	processParams.observe(c.baseURL, resp.Header)
 	r := response{status: resp.StatusCode, contentType: resp.Header.Get("Content-Type"), header: resp.Header}
 
 	// MaxBytesReader surfaces *http.MaxBytesError on overflow so callers see
@@ -279,4 +282,13 @@ func (c *Client) exchange(ctx context.Context, method, path string, query url.Va
 	}
 	r.body = respBody
 	return r, nil
+}
+
+func (c *Client) executeRequest(req *http.Request, path string) (*http.Response, error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, errorFromTransport(path, err)
+	}
+	processParams.observe(c.baseURL, resp.Header)
+	return resp, nil
 }
