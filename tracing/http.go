@@ -87,6 +87,12 @@ func ServerMiddleware(route func(*http.Request) string, skip func(*http.Request)
 			}
 			ctx, span := otel.Tracer(InstrumentationName).Start(ctx, name, trace.WithSpanKind(trace.SpanKindServer), trace.WithAttributes(attribute.String("http.request.method", method), attribute.String("url.scheme", scheme)))
 			defer span.End()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					Fail(span, "panic")
+					panic(recovered)
+				}
+			}()
 			request := r.WithContext(ctx)
 			metrics := httpsnoop.CaptureMetrics(next, w, request)
 			span.SetAttributes(attribute.Int("http.response.status_code", metrics.Code))

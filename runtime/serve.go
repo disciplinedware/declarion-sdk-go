@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -400,7 +401,9 @@ func handleRPC(w http.ResponseWriter, r *http.Request, cfg *Config) {
 	hctx.projectAuthority()
 
 	// Dispatch with params stripped of reserved keys.
-	result, err := executeRegisteredHandler(req.Method, hctx, paramsWithoutReserved)
+	result, err := recoverPanic(func() (any, error) {
+		return executeRegisteredHandler(req.Method, hctx, paramsWithoutReserved)
+	})
 	if err != nil {
 		writeHandlerError(ctx, w, hctx.Logger, req.ID, req.Method, err)
 		return
@@ -482,7 +485,7 @@ func handleVerifierDispatch(w http.ResponseWriter, r *http.Request, cfg *Config,
 		platformHTTP:  cfg.platformHTTP,
 	}
 
-	result, err := fn(vctx)
+	result, err := recoverPanic(func() (any, error) { return fn(vctx) })
 	if err != nil {
 		writeVerifierError(ctx, w, vctx.Logger, req.ID, err)
 		return
@@ -546,7 +549,13 @@ func decodeExternalRequestEnvelope(raw json.RawMessage) (*externalRequestEnvelop
 // once, beside the type the caller received. A failure with no cause is fully
 // described by what Core receives and logs, and is not logged twice.
 func writeError(ctx context.Context, w http.ResponseWriter, log *zap.Logger, id string, rpcCode int, e *errs.Error) {
-	tracing.Fail(trace.SpanFromContext(ctx), e.Code())
+	span := trace.SpanFromContext(ctx)
+	status := strconv.Itoa(rpcCode)
+	span.SetAttributes(attribute.String("rpc.response.status_code", status))
+	if errs.Declared(e.Code()) {
+		status = e.Code()
+	}
+	tracing.Fail(span, status)
 	if errors.Unwrap(e) != nil {
 		level := zap.WarnLevel
 		if e.Code() == errs.CodeInternalError {
@@ -670,4 +679,15 @@ func withHandlerTimeout(parent context.Context, header string) (context.Context,
 	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(ms)*time.Millisecond)
 	return ctx, cancel, nil
+}
+
+// recoverPanic turns a panicking handler or verifier into an ordinary failure, so the caller
+// gets a JSON-RPC error and the stack reaches the request's own logger instead of stderr.
+func recoverPanic(run func() (any, error)) (result any, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result, err = nil, fmt.Errorf("panic: %v\n%s", recovered, debug.Stack())
+		}
+	}()
+	return run()
 }

@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/disciplinedware/declarion-sdk-go/errs"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -87,4 +90,64 @@ func TestRPCTracingIncludesAuthenticatedWorkAndEarlyFailures(t *testing.T) {
 	for _, entry := range observed.FilterMessage("request failed").All() {
 		require.Equal(t, "http:POST", entry.ContextMap()["trace_path"])
 	}
+}
+
+func TestRPCFailuresCarryBoundedErrorTypes(t *testing.T) {
+	saved := otel.GetTracerProvider()
+	r := tracetest.NewSpanRecorder()
+	p := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(r))
+	otel.SetTracerProvider(p)
+	t.Cleanup(func() { otel.SetTracerProvider(saved); require.NoError(t, p.Shutdown(context.Background())) })
+	savedCatalogue := errs.ProcessRenderContext("en", "", 0)
+	errs.SetCatalogue(errs.Catalogue{"test.declared": &errs.TypeDef{Status: 409}}, "en")
+	t.Cleanup(func() { errs.SetCatalogue(savedCatalogue.Catalogue, savedCatalogue.DefaultLocale) })
+	core, observed := observer.New(zap.DebugLevel)
+	ClearHandlerRegistry()
+	t.Cleanup(ClearHandlerRegistry)
+	RegisterHandler[echoParams, echoResult]("test.panic", func(*HandlerCtx, echoParams) (echoResult, error) {
+		panic("secret-panic-value")
+	})
+	RegisterHandler[echoParams, echoResult]("test.undeclared", func(*HandlerCtx, echoParams) (echoResult, error) {
+		return echoResult{}, errs.New("test.secret-dynamic-42")
+	})
+	RegisterHandler[echoParams, echoResult]("test.declared", func(*HandlerCtx, echoParams) (echoResult, error) {
+		return echoResult{}, errs.New("test.declared")
+	})
+	handler, err := NewHandler(Config{JWTSecret: testSecret, RequireToken: true, Logger: zap.New(core)})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		method, wantType, wantStatus string
+	}{
+		{"test.panic", "-32603", "-32603"},
+		{"test.undeclared", "-32000", "-32000"},
+		{"test.declared", "test.declared", "-32000"},
+	} {
+		t.Run(tc.method, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":"1","method":"` + tc.method + `","params":{}}`
+			req := httptest.NewRequest(http.MethodPost, "http://sidecar/rpc", strings.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+mintTestToken(t, "tenant", "user", tc.method, "audit"))
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp Response
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			require.NotNil(t, resp.Error)
+			require.Equal(t, tc.wantStatus, strconv.Itoa(resp.Error.Code))
+			span := r.Ended()[len(r.Ended())-1]
+			require.Equal(t, codes.Error, span.Status().Code)
+			attrs := map[string]string{}
+			for _, attr := range span.Attributes() {
+				attrs[string(attr.Key)] = attr.Value.Emit()
+				require.NotContains(t, attr.Value.Emit(), "secret")
+			}
+			require.Equal(t, tc.wantType, attrs["error.type"])
+			require.Equal(t, tc.wantStatus, attrs["rpc.response.status_code"])
+		})
+	}
+	panicked := observed.FilterMessage("request failed").All()
+	require.Len(t, panicked, 1)
+	logged := panicked[0].ContextMap()
+	require.Contains(t, logged["error"], "secret-panic-value")
+	require.Contains(t, logged["error"], "runtime/debug.Stack")
+	require.NotEmpty(t, logged["trace_id"])
 }

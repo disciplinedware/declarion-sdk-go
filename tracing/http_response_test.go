@@ -56,3 +56,20 @@ func TestServerTracingPreservesResponseAndFirstStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestServerTracingMarksAPanicAndLetsItPropagate(t *testing.T) {
+	r := recorder(t)
+	handler := ServerMiddleware(nil, nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("secret-panic-value")
+	}))
+	require.PanicsWithValue(t, "secret-panic-value", func() {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://service/", nil))
+	})
+	span := r.Ended()[0]
+	require.Equal(t, codes.Error, span.Status().Code)
+	attrs := map[string]string{}
+	for _, attr := range span.Attributes() {
+		attrs[string(attr.Key)] = attr.Value.Emit()
+	}
+	require.Equal(t, "panic", attrs["error.type"])
+}

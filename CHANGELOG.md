@@ -10,6 +10,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ### Fixed
 
+- A panicking handler or verifier answers JSON-RPC `-32603` instead of dropping the connection; the stack is logged through the request's own logger with its trace. Sidecar RPC spans record `rpc.response.status_code`, and `error.type` is a declared code or the JSON-RPC code, never handler-chosen text. `tracing.ServerMiddleware` marks a panicking request `error.type=panic` before re-raising it.
+
 - Trace error classification excludes undeclared peer codes and arbitrary error text. Generic failures use `_OTHER`; only actual network failures use `transport`.
 
 - ACS decision events use standard evaluator values and preserve evaluator version and model id. Missing optional evaluator metadata omits the event without fabricating a value or a failed operation.
