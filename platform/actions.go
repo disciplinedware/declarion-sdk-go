@@ -25,7 +25,8 @@ type ActionsClient struct {
 // write-API rewrite and is now rejected by parseActionBody (400). Callers
 // who pre-built bodies with `_ids` must rename to `object_ids`.
 type InvokeParams struct {
-	// Args are the handler parameters (top-level keys in the JSON body).
+	// Args are the handler parameters (top-level keys in the JSON body). A value
+	// whose key order must reach the handler is passed as json.RawMessage.
 	Args map[string]any
 	// IDs are the object IDs for single/batch-scope actions. Forbidden
 	// for global-scope actions.
