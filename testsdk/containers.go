@@ -414,7 +414,7 @@ func bootstrapTestPlatformActor(ctx context.Context, pgContainer *postgres.Postg
 		DO UPDATE SET is_tenant_owner = true;
 
 		INSERT INTO declarion.roles (tenant_id, code, name, permissions, created_by)
-		VALUES ('%[6]s', 'platform_admin', 'Platform Admin', '["*"]'::jsonb, '%[3]s')
+		VALUES ('%[6]s', 'platform_admin', 'Platform Admin', ARRAY['*']::text[], '%[3]s')
 		ON CONFLICT ON CONSTRAINT roles_tenant_code_unique
 		DO UPDATE SET code = EXCLUDED.code;
 

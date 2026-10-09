@@ -6,6 +6,10 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+### Fixed
+
+- `testsdk` seeds the platform actor's role with `permissions` as `text[]`, the type Core 0.63 stores; the `jsonb` literal refused every integration harness on Core 0.63.
+
 ## [v0.24.0] - 2026-10-09
 
 - `platform.InvokeParams.Args` documents that a `json.RawMessage` argument is sent verbatim, with its key order, by `Invoke` and `InvokeStreaming`; a test locks it. Whether the order reaches the handler is each action's contract.
