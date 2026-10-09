@@ -6,6 +6,8 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versions follo
 
 ## [Unreleased]
 
+## [v0.24.1] - 2026-10-09
+
 ### Fixed
 
 - `testsdk` seeds the platform actor's role with `permissions` as `text[]`, the type Core 0.63 stores; the `jsonb` literal refused every integration harness on Core 0.63.
